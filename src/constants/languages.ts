@@ -1,0 +1,17 @@
+export const LANGUAGES = [
+  { label: 'English', value: 'en', name: 'English' },
+  { label: 'German', value: 'de', name: 'German' },
+  { label: 'Spanish', value: 'es', name: 'Spanish' },
+  { label: 'French', value: 'fr', name: 'French' },
+  { label: 'Italian', value: 'it', name: 'Italian' },
+  { label: 'Portuguese', value: 'pt', name: 'Portuguese' },
+  { label: 'Dutch', value: 'nl', name: 'Dutch' },
+  { label: 'Russian', value: 'ru', name: 'Russian' },
+  { label: 'Chinese (Mandarin)', value: 'zh', name: 'Chinese' },
+  { label: 'Japanese', value: 'ja', name: 'Japanese' },
+  { label: 'Korean', value: 'ko', name: 'Korean' },
+  { label: 'Arabic', value: 'ar', name: 'Arabic' },
+  { label: 'Hindi', value: 'hi', name: 'Hindi' },
+  { label: 'Turkish', value: 'tr', name: 'Turkish' },
+  { label: 'Polish', value: 'pl', name: 'Polish' },
+];
