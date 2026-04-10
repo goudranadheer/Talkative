@@ -10,10 +10,13 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
 } from 'react-native';
 import { useApp, Message } from '../context/AppContext';
 import { translate } from '../services/translator';
 import { translateWithReasoning } from '../services/reasoning';
+import { transcribe } from '../services/stt';
+import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 
@@ -30,22 +33,22 @@ export default function ConversationScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const listRef = useRef<FlatList>(null);
+  const { state: recorderState, startRecording, stopRecording } = useAudioRecorder();
 
   const myLang = briefing.myLanguage!;
   const theirLang = briefing.theirLanguage!;
+  const micEnabled = groqApiKey.trim().length > 0;
+  const isRecording = recorderState === 'recording';
+  const isProcessing = recorderState === 'processing' || loading;
 
-  async function handleTranslate() {
-    const text = inputText.trim();
-    if (!text || loading) return;
-
-    setInputText('');
+  async function handleTranslateText(text: string, speaker: ActiveSpeaker) {
     setError('');
     setLoading(true);
 
-    try {
-      const fromLang = activeSpeaker === 'them' ? theirLang : myLang;
-      const toLang = activeSpeaker === 'them' ? myLang : theirLang;
+    const fromLang = speaker === 'them' ? theirLang : myLang;
+    const toLang = speaker === 'them' ? myLang : theirLang;
 
+    try {
       let translated: string;
 
       if (translationMode === 'reasoning') {
@@ -67,7 +70,7 @@ export default function ConversationScreen({ navigation }: Props) {
 
       const msg: Message = {
         id: Date.now().toString(),
-        speaker: activeSpeaker,
+        speaker,
         original: text,
         translated,
         timestamp: new Date(),
@@ -76,8 +79,46 @@ export default function ConversationScreen({ navigation }: Props) {
       addMessage(msg);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
     } catch (e: any) {
-      setError(e?.message ?? 'Translation failed. Check your API key.');
+      setError(e?.message ?? 'Translation failed.');
     } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSendText() {
+    const text = inputText.trim();
+    if (!text || isProcessing) return;
+    setInputText('');
+    await handleTranslateText(text, activeSpeaker);
+  }
+
+  async function handleMicPressIn() {
+    if (isProcessing) return;
+    setError('');
+    try {
+      await startRecording();
+    } catch (e: any) {
+      setError('Microphone permission denied.');
+    }
+  }
+
+  async function handleMicPressOut() {
+    if (recorderState !== 'recording') return;
+    try {
+      const uri = await stopRecording();
+      if (!uri) return;
+
+      setLoading(true);
+      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
+      if (!text) { setLoading(false); return; }
+
+      // Auto-detect speaker from detected language
+      const speaker: ActiveSpeaker =
+        detectedLanguage === myLang.value ? 'me' : 'them';
+
+      await handleTranslateText(text, speaker);
+    } catch (e: any) {
+      setError(e?.message ?? 'Transcription failed.');
       setLoading(false);
     }
   }
@@ -126,55 +167,85 @@ export default function ConversationScreen({ navigation }: Props) {
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Text style={styles.emptyText}>Conversation will appear here</Text>
-              <Text style={styles.emptySubText}>Select who is speaking and type what they said</Text>
+              <Text style={styles.emptySubText}>
+                {micEnabled ? 'Hold the mic button to speak' : 'Type what was said and tap send'}
+              </Text>
             </View>
           }
         />
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {/* Speaker toggle */}
-        <View style={styles.speakerToggle}>
-          <TouchableOpacity
-            style={[styles.speakerBtn, activeSpeaker === 'them' && styles.speakerBtnActive]}
-            onPress={() => setActiveSpeaker('them')}
-          >
-            <Text style={[styles.speakerBtnText, activeSpeaker === 'them' && styles.speakerBtnTextActive]}>
-              {theirLang.name} speaking
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.speakerBtn, activeSpeaker === 'me' && styles.speakerBtnActive]}
-            onPress={() => setActiveSpeaker('me')}
-          >
-            <Text style={[styles.speakerBtnText, activeSpeaker === 'me' && styles.speakerBtnTextActive]}>
-              {myLang.name} speaking
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {/* Speaker toggle — shown only in text mode */}
+        {!micEnabled && (
+          <View style={styles.speakerToggle}>
+            <TouchableOpacity
+              style={[styles.speakerBtn, activeSpeaker === 'them' && styles.speakerBtnActive]}
+              onPress={() => setActiveSpeaker('them')}
+            >
+              <Text style={[styles.speakerBtnText, activeSpeaker === 'them' && styles.speakerBtnTextActive]}>
+                {theirLang.name} speaking
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.speakerBtn, activeSpeaker === 'me' && styles.speakerBtnActive]}
+              onPress={() => setActiveSpeaker('me')}
+            >
+              <Text style={[styles.speakerBtnText, activeSpeaker === 'me' && styles.speakerBtnTextActive]}>
+                {myLang.name} speaking
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-        {/* Input */}
+        {/* Input row */}
         <View style={styles.inputRow}>
-          <TextInput
-            style={styles.input}
-            placeholder={`Type what ${activeSpeaker === 'them' ? theirLang.name : myLang.name} speaker said...`}
-            placeholderTextColor="#555"
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-            onSubmitEditing={handleTranslate}
-          />
-          <TouchableOpacity
-            style={[styles.sendBtn, (!inputText.trim() || loading) && styles.sendBtnDisabled]}
-            onPress={handleTranslate}
-            disabled={!inputText.trim() || loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.sendBtnText}>↑</Text>
-            )}
-          </TouchableOpacity>
+          {micEnabled ? (
+            <>
+              {/* Mic mode: hold to record */}
+              <View style={styles.micHint}>
+                {isProcessing ? (
+                  <ActivityIndicator color="#6c63ff" />
+                ) : (
+                  <Text style={styles.micHintText}>
+                    {isRecording ? 'Release to translate...' : 'Hold mic to speak'}
+                  </Text>
+                )}
+              </View>
+              <Pressable
+                style={[styles.micBtn, isRecording && styles.micBtnActive]}
+                onPressIn={handleMicPressIn}
+                onPressOut={handleMicPressOut}
+                disabled={isProcessing}
+              >
+                <Text style={styles.micBtnIcon}>{isRecording ? '⏹' : '🎙'}</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              {/* Text mode */}
+              <TextInput
+                style={styles.input}
+                placeholder={`Type what ${activeSpeaker === 'them' ? theirLang.name : myLang.name} speaker said...`}
+                placeholderTextColor="#555"
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                onSubmitEditing={handleSendText}
+              />
+              <TouchableOpacity
+                style={[styles.sendBtn, (!inputText.trim() || isProcessing) && styles.sendBtnDisabled]}
+                onPress={handleSendText}
+                disabled={!inputText.trim() || isProcessing}
+              >
+                {isProcessing ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.sendBtnText}>↑</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -231,12 +302,7 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: '#2a2a3e', marginVertical: 8 },
   bubbleTranslated: { color: '#fff', fontSize: 15, fontWeight: '500' },
   error: { color: '#ff6b6b', fontSize: 13, textAlign: 'center', marginHorizontal: 16, marginBottom: 8 },
-  speakerToggle: {
-    flexDirection: 'row',
-    marginHorizontal: 16,
-    marginBottom: 8,
-    gap: 8,
-  },
+  speakerToggle: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 8, gap: 8 },
   speakerBtn: {
     flex: 1,
     padding: 10,
@@ -251,7 +317,7 @@ const styles = StyleSheet.create({
   speakerBtnTextActive: { color: '#fff' },
   inputRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingBottom: 16,
     gap: 10,
@@ -277,4 +343,18 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: '#3a3a5c', opacity: 0.5 },
   sendBtnText: { color: '#fff', fontSize: 22, fontWeight: '700' },
+  micHint: { flex: 1, alignItems: 'center' },
+  micHintText: { color: '#555', fontSize: 14 },
+  micBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#1e1e2e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#6c63ff',
+  },
+  micBtnActive: { backgroundColor: '#6c63ff33', borderColor: '#ff6b6b' },
+  micBtnIcon: { fontSize: 28 },
 });

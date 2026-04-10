@@ -27,12 +27,11 @@ export default function BriefingScreen({ navigation }: Props) {
   const [localGroqKey, setLocalGroqKey] = useState(groqApiKey);
   const [pickerTarget, setPickerTarget] = useState<'mine' | 'theirs' | null>(null);
 
-  const needsGroqKey = translationMode === 'reasoning';
   const canStart =
     myLanguage &&
     theirLanguage &&
     myLanguage.value !== theirLanguage.value &&
-    (!needsGroqKey || localGroqKey.trim().length > 0);
+    (translationMode === 'free' || localGroqKey.trim().length > 0);
 
   function handleStart() {
     setBriefing({ myLanguage, theirLanguage, context });
@@ -110,24 +109,20 @@ export default function BriefingScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
-        {/* Groq key — only shown in reasoning mode */}
-        {translationMode === 'reasoning' && (
-          <>
-            <Text style={styles.label}>
-              Groq API Key{' '}
-              <Text style={styles.optional}>(free at console.groq.com)</Text>
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="gsk_..."
-              placeholderTextColor="#999"
-              secureTextEntry
-              autoCapitalize="none"
-              value={localGroqKey}
-              onChangeText={setLocalGroqKey}
-            />
-          </>
-        )}
+        {/* Groq key — always shown, unlocks mic + reasoning */}
+        <Text style={styles.label}>
+          Groq API Key{' '}
+          <Text style={styles.optional}>(free at console.groq.com — unlocks mic & reasoning)</Text>
+        </Text>
+        <TextInput
+          style={styles.input}
+          placeholder="gsk_... (optional — text input works without it)"
+          placeholderTextColor="#999"
+          secureTextEntry
+          autoCapitalize="none"
+          value={localGroqKey}
+          onChangeText={setLocalGroqKey}
+        />
 
         <TouchableOpacity
           style={[styles.startButton, !canStart && styles.startButtonDisabled]}
