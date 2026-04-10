@@ -32,6 +32,8 @@ type AppContextType = {
   setGroqApiKey: (key: string) => void;
   translationMode: TranslationMode;
   setTranslationMode: (mode: TranslationMode) => void;
+  ttsEnabled: boolean;
+  setTtsEnabled: (v: boolean) => void;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -45,6 +47,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [groqApiKey, setGroqApiKey] = useState('');
   const [translationMode, setTranslationMode] = useState<TranslationMode>('free');
+  const [ttsEnabled, setTtsEnabled] = useState(true);
 
   const addMessage = (m: Message) => setMessages(prev => [...prev, m]);
   const clearMessages = () => setMessages([]);
@@ -55,6 +58,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       messages, addMessage, clearMessages,
       groqApiKey, setGroqApiKey,
       translationMode, setTranslationMode,
+      ttsEnabled, setTtsEnabled,
     }}>
       {children}
     </AppContext.Provider>

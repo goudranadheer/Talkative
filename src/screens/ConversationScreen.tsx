@@ -16,6 +16,7 @@ import { useApp, Message } from '../context/AppContext';
 import { translate } from '../services/translator';
 import { translateWithReasoning } from '../services/reasoning';
 import { transcribe } from '../services/stt';
+import { speak, stopSpeech } from '../services/tts';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -27,11 +28,12 @@ type Props = {
 type ActiveSpeaker = 'me' | 'them';
 
 export default function ConversationScreen({ navigation }: Props) {
-  const { briefing, messages, addMessage, clearMessages, groqApiKey, translationMode } = useApp();
+  const { briefing, messages, addMessage, clearMessages, groqApiKey, translationMode, ttsEnabled, setTtsEnabled } = useApp();
   const [inputText, setInputText] = useState('');
   const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>('them');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
   const { state: recorderState, startRecording, stopRecording } = useAudioRecorder();
 
@@ -40,6 +42,16 @@ export default function ConversationScreen({ navigation }: Props) {
   const micEnabled = groqApiKey.trim().length > 0;
   const isRecording = recorderState === 'recording';
   const isProcessing = recorderState === 'processing' || loading;
+
+  async function speakTranslation(msg: Message) {
+    const targetLang = msg.speaker === 'them' ? myLang : theirLang;
+    setSpeakingId(msg.id);
+    try {
+      await speak(msg.translated, targetLang.value);
+    } finally {
+      setSpeakingId(null);
+    }
+  }
 
   async function handleTranslateText(text: string, speaker: ActiveSpeaker) {
     setError('');
@@ -78,6 +90,11 @@ export default function ConversationScreen({ navigation }: Props) {
 
       addMessage(msg);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+
+      // Auto-speak the translation
+      if (ttsEnabled) {
+        await speakTranslation(msg);
+      }
     } catch (e: any) {
       setError(e?.message ?? 'Translation failed.');
     } finally {
@@ -94,10 +111,12 @@ export default function ConversationScreen({ navigation }: Props) {
 
   async function handleMicPressIn() {
     if (isProcessing) return;
+    stopSpeech();
+    setSpeakingId(null);
     setError('');
     try {
       await startRecording();
-    } catch (e: any) {
+    } catch {
       setError('Microphone permission denied.');
     }
   }
@@ -112,10 +131,7 @@ export default function ConversationScreen({ navigation }: Props) {
       const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
       if (!text) { setLoading(false); return; }
 
-      // Auto-detect speaker from detected language
-      const speaker: ActiveSpeaker =
-        detectedLanguage === myLang.value ? 'me' : 'them';
-
+      const speaker: ActiveSpeaker = detectedLanguage === myLang.value ? 'me' : 'them';
       await handleTranslateText(text, speaker);
     } catch (e: any) {
       setError(e?.message ?? 'Transcription failed.');
@@ -123,11 +139,27 @@ export default function ConversationScreen({ navigation }: Props) {
     }
   }
 
+  async function handleReplay(msg: Message) {
+    if (speakingId) {
+      stopSpeech();
+      setSpeakingId(null);
+      return;
+    }
+    await speakTranslation(msg);
+  }
+
   function renderMessage({ item }: { item: Message }) {
     const isMe = item.speaker === 'me';
+    const isSpeaking = speakingId === item.id;
+
     return (
       <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
-        <Text style={styles.bubbleSpeaker}>{isMe ? myLang.name : theirLang.name}</Text>
+        <View style={styles.bubbleHeader}>
+          <Text style={styles.bubbleSpeaker}>{isMe ? myLang.name : theirLang.name}</Text>
+          <TouchableOpacity onPress={() => handleReplay(item)} style={styles.replayBtn}>
+            <Text style={styles.replayIcon}>{isSpeaking ? '⏹' : '▶'}</Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.bubbleOriginal}>{item.original}</Text>
         <View style={styles.divider} />
         <Text style={styles.bubbleTranslated}>{item.translated}</Text>
@@ -143,12 +175,18 @@ export default function ConversationScreen({ navigation }: Props) {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
             <Text style={styles.backText}>← Edit</Text>
           </TouchableOpacity>
-          <Text style={styles.langPair}>
-            {myLang.name} ↔ {theirLang.name}
-          </Text>
-          <TouchableOpacity onPress={clearMessages}>
-            <Text style={styles.clearText}>Clear</Text>
-          </TouchableOpacity>
+          <Text style={styles.langPair}>{myLang.name} ↔ {theirLang.name}</Text>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={() => { setTtsEnabled(!ttsEnabled); stopSpeech(); setSpeakingId(null); }}
+              style={styles.muteBtn}
+            >
+              <Text style={styles.muteIcon}>{ttsEnabled ? '🔊' : '🔇'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={clearMessages}>
+              <Text style={styles.clearText}>Clear</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {briefing.context ? (
@@ -176,7 +214,7 @@ export default function ConversationScreen({ navigation }: Props) {
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {/* Speaker toggle — shown only in text mode */}
+        {/* Speaker toggle — text mode only */}
         {!micEnabled && (
           <View style={styles.speakerToggle}>
             <TouchableOpacity
@@ -202,7 +240,6 @@ export default function ConversationScreen({ navigation }: Props) {
         <View style={styles.inputRow}>
           {micEnabled ? (
             <>
-              {/* Mic mode: hold to record */}
               <View style={styles.micHint}>
                 {isProcessing ? (
                   <ActivityIndicator color="#6c63ff" />
@@ -223,7 +260,6 @@ export default function ConversationScreen({ navigation }: Props) {
             </>
           ) : (
             <>
-              {/* Text mode */}
               <TextInput
                 style={styles.input}
                 placeholder={`Type what ${activeSpeaker === 'them' ? theirLang.name : myLang.name} speaker said...`}
@@ -265,6 +301,9 @@ const styles = StyleSheet.create({
   backBtn: { padding: 4 },
   backText: { color: '#6c63ff', fontSize: 15, fontWeight: '600' },
   langPair: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  muteBtn: { padding: 4 },
+  muteIcon: { fontSize: 20 },
   clearText: { color: '#ff6b6b', fontSize: 14 },
   contextBadge: {
     backgroundColor: '#1a1a2e',
@@ -287,17 +326,12 @@ const styles = StyleSheet.create({
     maxWidth: '90%',
     borderWidth: 1,
   },
-  bubbleMe: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#1a1a3e',
-    borderColor: '#6c63ff44',
-  },
-  bubbleThem: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1e1e2e',
-    borderColor: '#333',
-  },
-  bubbleSpeaker: { fontSize: 11, color: '#666', marginBottom: 4, fontWeight: '600', textTransform: 'uppercase' },
+  bubbleMe: { alignSelf: 'flex-end', backgroundColor: '#1a1a3e', borderColor: '#6c63ff44' },
+  bubbleThem: { alignSelf: 'flex-start', backgroundColor: '#1e1e2e', borderColor: '#333' },
+  bubbleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  bubbleSpeaker: { fontSize: 11, color: '#666', fontWeight: '600', textTransform: 'uppercase' },
+  replayBtn: { padding: 4 },
+  replayIcon: { fontSize: 13, color: '#6c63ff' },
   bubbleOriginal: { color: '#ccc', fontSize: 15 },
   divider: { height: 1, backgroundColor: '#2a2a3e', marginVertical: 8 },
   bubbleTranslated: { color: '#fff', fontSize: 15, fontWeight: '500' },
