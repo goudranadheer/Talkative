@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useApp, Message } from '../context/AppContext';
 import { translate } from '../services/translator';
+import { translateWithReasoning } from '../services/reasoning';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 
@@ -23,7 +24,7 @@ type Props = {
 type ActiveSpeaker = 'me' | 'them';
 
 export default function ConversationScreen({ navigation }: Props) {
-  const { briefing, messages, addMessage, clearMessages, apiKey } = useApp();
+  const { briefing, messages, addMessage, clearMessages, groqApiKey, translationMode } = useApp();
   const [inputText, setInputText] = useState('');
   const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>('them');
   const [loading, setLoading] = useState(false);
@@ -42,17 +43,27 @@ export default function ConversationScreen({ navigation }: Props) {
     setLoading(true);
 
     try {
-      const fromLang = activeSpeaker === 'them' ? theirLang.name : myLang.name;
-      const toLang = activeSpeaker === 'them' ? myLang.name : theirLang.name;
+      const fromLang = activeSpeaker === 'them' ? theirLang : myLang;
+      const toLang = activeSpeaker === 'them' ? myLang : theirLang;
 
-      const translated = await translate({
-        text,
-        fromLanguage: fromLang,
-        toLanguage: toLang,
-        conversationContext: briefing.context,
-        history: messages,
-        apiKey,
-      });
+      let translated: string;
+
+      if (translationMode === 'reasoning') {
+        translated = await translateWithReasoning({
+          text,
+          fromLanguage: fromLang.name,
+          toLanguage: toLang.name,
+          conversationContext: briefing.context,
+          history: messages,
+          groqApiKey,
+        });
+      } else {
+        translated = await translate({
+          text,
+          fromLangCode: fromLang.value,
+          toLangCode: toLang.value,
+        });
+      }
 
       const msg: Message = {
         id: Date.now().toString(),

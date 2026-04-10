@@ -20,14 +20,18 @@ export type Message = {
   timestamp: Date;
 };
 
+export type TranslationMode = 'free' | 'reasoning';
+
 type AppContextType = {
   briefing: BriefingConfig;
   setBriefing: (b: BriefingConfig) => void;
   messages: Message[];
   addMessage: (m: Message) => void;
   clearMessages: () => void;
-  apiKey: string;
-  setApiKey: (key: string) => void;
+  groqApiKey: string;
+  setGroqApiKey: (key: string) => void;
+  translationMode: TranslationMode;
+  setTranslationMode: (mode: TranslationMode) => void;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -39,13 +43,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     context: '',
   });
   const [messages, setMessages] = useState<Message[]>([]);
-  const [apiKey, setApiKey] = useState('');
+  const [groqApiKey, setGroqApiKey] = useState('');
+  const [translationMode, setTranslationMode] = useState<TranslationMode>('free');
 
   const addMessage = (m: Message) => setMessages(prev => [...prev, m]);
   const clearMessages = () => setMessages([]);
 
   return (
-    <AppContext.Provider value={{ briefing, setBriefing, messages, addMessage, clearMessages, apiKey, setApiKey }}>
+    <AppContext.Provider value={{
+      briefing, setBriefing,
+      messages, addMessage, clearMessages,
+      groqApiKey, setGroqApiKey,
+      translationMode, setTranslationMode,
+    }}>
       {children}
     </AppContext.Provider>
   );

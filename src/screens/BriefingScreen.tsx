@@ -10,7 +10,7 @@ import {
   FlatList,
   SafeAreaView,
 } from 'react-native';
-import { useApp, Language } from '../context/AppContext';
+import { useApp, Language, TranslationMode } from '../context/AppContext';
 import { LANGUAGES } from '../constants/languages';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -20,18 +20,23 @@ type Props = {
 };
 
 export default function BriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, apiKey, setApiKey } = useApp();
+  const { briefing, setBriefing, groqApiKey, setGroqApiKey, translationMode, setTranslationMode } = useApp();
   const [myLanguage, setMyLanguage] = useState<Language | null>(briefing.myLanguage);
   const [theirLanguage, setTheirLanguage] = useState<Language | null>(briefing.theirLanguage);
   const [context, setContext] = useState(briefing.context);
-  const [localApiKey, setLocalApiKey] = useState(apiKey);
+  const [localGroqKey, setLocalGroqKey] = useState(groqApiKey);
   const [pickerTarget, setPickerTarget] = useState<'mine' | 'theirs' | null>(null);
 
-  const canStart = myLanguage && theirLanguage && myLanguage.value !== theirLanguage.value && localApiKey.trim().length > 0;
+  const needsGroqKey = translationMode === 'reasoning';
+  const canStart =
+    myLanguage &&
+    theirLanguage &&
+    myLanguage.value !== theirLanguage.value &&
+    (!needsGroqKey || localGroqKey.trim().length > 0);
 
   function handleStart() {
     setBriefing({ myLanguage, theirLanguage, context });
-    setApiKey(localApiKey.trim());
+    setGroqApiKey(localGroqKey.trim());
     navigation.navigate('Conversation');
   }
 
@@ -47,6 +52,7 @@ export default function BriefingScreen({ navigation }: Props) {
         <Text style={styles.title}>Talkative</Text>
         <Text style={styles.subtitle}>Set up your conversation</Text>
 
+        {/* Language pickers */}
         <Text style={styles.label}>Your language</Text>
         <TouchableOpacity style={styles.picker} onPress={() => setPickerTarget('mine')}>
           <Text style={myLanguage ? styles.pickerText : styles.pickerPlaceholder}>
@@ -65,6 +71,7 @@ export default function BriefingScreen({ navigation }: Props) {
           <Text style={styles.error}>Languages must be different</Text>
         )}
 
+        {/* Context */}
         <Text style={styles.label}>Conversation context <Text style={styles.optional}>(optional)</Text></Text>
         <TextInput
           style={[styles.input, styles.textArea]}
@@ -76,16 +83,51 @@ export default function BriefingScreen({ navigation }: Props) {
           onChangeText={setContext}
         />
 
-        <Text style={styles.label}>Anthropic API Key</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="sk-ant-..."
-          placeholderTextColor="#999"
-          secureTextEntry
-          autoCapitalize="none"
-          value={localApiKey}
-          onChangeText={setLocalApiKey}
-        />
+        {/* Translation mode toggle */}
+        <Text style={styles.label}>Translation mode</Text>
+        <View style={styles.modeToggle}>
+          <TouchableOpacity
+            style={[styles.modeBtn, translationMode === 'free' && styles.modeBtnActive]}
+            onPress={() => setTranslationMode('free')}
+          >
+            <Text style={[styles.modeBtnText, translationMode === 'free' && styles.modeBtnTextActive]}>
+              Free
+            </Text>
+            <Text style={[styles.modeBtnSub, translationMode === 'free' && styles.modeBtnSubActive]}>
+              MyMemory · No key needed
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modeBtn, translationMode === 'reasoning' && styles.modeBtnActive]}
+            onPress={() => setTranslationMode('reasoning')}
+          >
+            <Text style={[styles.modeBtnText, translationMode === 'reasoning' && styles.modeBtnTextActive]}>
+              Reasoning
+            </Text>
+            <Text style={[styles.modeBtnSub, translationMode === 'reasoning' && styles.modeBtnSubActive]}>
+              Groq DeepSeek R1 · Free key
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Groq key — only shown in reasoning mode */}
+        {translationMode === 'reasoning' && (
+          <>
+            <Text style={styles.label}>
+              Groq API Key{' '}
+              <Text style={styles.optional}>(free at console.groq.com)</Text>
+            </Text>
+            <TextInput
+              style={styles.input}
+              placeholder="gsk_..."
+              placeholderTextColor="#999"
+              secureTextEntry
+              autoCapitalize="none"
+              value={localGroqKey}
+              onChangeText={setLocalGroqKey}
+            />
+          </>
+        )}
 
         <TouchableOpacity
           style={[styles.startButton, !canStart && styles.startButtonDisabled]}
@@ -96,6 +138,7 @@ export default function BriefingScreen({ navigation }: Props) {
         </TouchableOpacity>
       </ScrollView>
 
+      {/* Language picker modal */}
       <Modal visible={pickerTarget !== null} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -148,6 +191,21 @@ const styles = StyleSheet.create({
   },
   textArea: { height: 90, textAlignVertical: 'top' },
   error: { color: '#ff6b6b', fontSize: 13, marginTop: 6 },
+  modeToggle: { flexDirection: 'row', gap: 10 },
+  modeBtn: {
+    flex: 1,
+    backgroundColor: '#1e1e2e',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  modeBtnActive: { backgroundColor: '#1a1a3e', borderColor: '#6c63ff' },
+  modeBtnText: { color: '#666', fontSize: 15, fontWeight: '700' },
+  modeBtnTextActive: { color: '#fff' },
+  modeBtnSub: { color: '#444', fontSize: 11, marginTop: 4, textAlign: 'center' },
+  modeBtnSubActive: { color: '#6c63ff' },
   startButton: {
     backgroundColor: '#6c63ff',
     borderRadius: 14,
