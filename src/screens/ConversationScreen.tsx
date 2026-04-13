@@ -116,8 +116,8 @@ export default function ConversationScreen({ navigation }: Props) {
     setError('');
     try {
       await startRecording();
-    } catch {
-      setError('Microphone permission denied.');
+    } catch (e: any) {
+      setError(e?.message ?? JSON.stringify(e) ?? 'Unknown mic error');
     }
   }
 
