@@ -34,6 +34,14 @@
         "projectId": "827d11dd-019d-4a1b-bcd6-d22802307f4f"
       }
     },
-    "owner": "ranadheerpodishetti"
+    "owner": "ranadheerpodishetti",
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow Talkative to access your microphone for voice translation."
+        }
+      ]
+    ]
   }
 }
