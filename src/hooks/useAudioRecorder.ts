@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Audio } from 'expo-av';
+import { Alert, Linking } from 'react-native';
 
 type RecorderState = 'idle' | 'recording' | 'processing';
 
@@ -9,7 +10,26 @@ export function useAudioRecorder() {
 
   async function startRecording() {
     try {
-      await Audio.requestPermissionsAsync();
+      const { status, canAskAgain } = await Audio.requestPermissionsAsync();
+
+      if (status !== 'granted') {
+        if (!canAskAgain) {
+          // User permanently denied — send them to settings
+          Alert.alert(
+            'Microphone Permission Required',
+            'Please enable microphone access for Talkative in your phone Settings → Apps → Talkative → Permissions → Microphone.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() },
+            ]
+          );
+        } else {
+          Alert.alert('Permission Denied', 'Microphone access is needed to use the mic feature.');
+        }
+        setState('idle');
+        return;
+      }
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
