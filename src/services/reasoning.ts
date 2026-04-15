@@ -5,16 +5,20 @@ type ReasonParams = {
   text: string;
   fromLanguage: string;
   toLanguage: string;
+  myLanguage: string;
+  theirLanguage: string;
   conversationContext: string;
   history: Message[];
   groqApiKey: string;
 };
 
-// Groq free tier — DeepSeek R1 reasoning model for context-aware translation
+// Groq free tier — context-aware translation using Llama
 export async function translateWithReasoning({
   text,
   fromLanguage,
   toLanguage,
+  myLanguage,
+  theirLanguage,
   conversationContext,
   history,
   groqApiKey,
@@ -22,7 +26,7 @@ export async function translateWithReasoning({
   const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
 
   const historyBlock = history.slice(-6).map(m =>
-    `${m.speaker === 'me' ? fromLanguage : toLanguage}: "${m.original}" → "${m.translated}"`
+    `${m.speaker === 'me' ? myLanguage : theirLanguage}: "${m.original}" → "${m.translated}"`
   ).join('\n');
 
   const systemPrompt = `You are a real-time conversation translator.
@@ -36,7 +40,7 @@ Output ONLY the translated text. No explanations, no quotes, no reasoning in you
   ].join('');
 
   const response = await client.chat.completions.create({
-    model: 'deepseek-r1-distill-llama-70b',
+    model: 'llama-3.1-8b-instant',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
@@ -51,3 +55,62 @@ Output ONLY the translated text. No explanations, no quotes, no reasoning in you
 
   return result;
 }
+
+export async function generateSuggestions({
+  history,
+  conversationContext,
+  myLanguage,
+  theirLanguage,
+  lastSpeaker,
+  groqApiKey,
+}: {
+  history: Message[];
+  conversationContext: string;
+  myLanguage: string;
+  theirLanguage: string;
+  lastSpeaker: 'me' | 'them';
+  groqApiKey: string;
+}): Promise<string[]> {
+  const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
+
+  const historyBlock = history.slice(-10).map(m =>
+    `${m.speaker === 'me' ? `User (${myLanguage})` : `Other (${theirLanguage})`}: ${m.original}`
+  ).join('\n');
+
+  const systemPrompt = lastSpeaker === 'them'
+    ? `You are an elite conversation coach.
+Context: ${conversationContext}
+
+The ${theirLanguage} speaker just spoke. Suggest 3 smart, natural replies the user (${myLanguage} speaker) should say next.
+
+Guidelines:
+1. Directly address what the other person just said.
+2. Keep each suggestion under 10 words.
+3. Format exactly: Suggestion 1 | Suggestion 2 | Suggestion 3`
+    : `You are an elite conversation coach.
+Context: ${conversationContext}
+
+The user (${myLanguage} speaker) just spoke. Predict 3 likely things the ${theirLanguage} speaker might say next, so the user can prepare.
+
+Guidelines:
+1. Base predictions on the conversation flow and context.
+2. Keep each prediction under 10 words.
+3. Format exactly: Suggestion 1 | Suggestion 2 | Suggestion 3`;
+
+  const userPrompt = lastSpeaker === 'them'
+    ? `History:\n${historyBlock}\n\nWhat should I (${myLanguage}) say next?`
+    : `History:\n${historyBlock}\n\nWhat might the ${theirLanguage} speaker say next?`;
+
+  const response = await client.chat.completions.create({
+    model: 'llama-3.1-8b-instant',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature: 0.7,
+  });
+
+  const content = response.choices[0]?.message?.content ?? '';
+  return content.split('|').map(s => s.trim().replace(/^Suggestion \d+: /i, '').replace(/^"/, '').replace(/"$/, ''));
+}
+

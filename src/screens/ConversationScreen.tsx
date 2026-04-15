@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   TextInput,
   FlatList,
+  ScrollView,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -14,7 +15,7 @@ import {
 } from 'react-native';
 import { useApp, Message } from '../context/AppContext';
 import { translate } from '../services/translator';
-import { translateWithReasoning } from '../services/reasoning';
+import { translateWithReasoning, generateSuggestions } from '../services/reasoning';
 import { transcribe } from '../services/stt';
 import { speak, stopSpeech } from '../services/tts';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
@@ -34,6 +35,8 @@ export default function ConversationScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [lastDetectedSpeaker, setLastDetectedSpeaker] = useState<ActiveSpeaker | null>(null);
   const listRef = useRef<FlatList>(null);
   const { state: recorderState, startRecording, stopRecording } = useAudioRecorder();
 
@@ -42,6 +45,22 @@ export default function ConversationScreen({ navigation }: Props) {
   const micEnabled = groqApiKey.trim().length > 0;
   const isRecording = recorderState === 'recording';
   const isProcessing = recorderState === 'processing' || loading;
+
+  async function updateSuggestions(currentMessages: Message[], lastSpeaker: ActiveSpeaker) {
+    try {
+      const sugs = await generateSuggestions({
+        history: currentMessages,
+        conversationContext: briefing.context,
+        myLanguage: myLang.name,
+        theirLanguage: theirLang.name,
+        lastSpeaker,
+        groqApiKey,
+      });
+      setSuggestions(sugs);
+    } catch (e) {
+      console.error('Failed to update suggestions:', e);
+    }
+  }
 
   async function speakTranslation(msg: Message) {
     const targetLang = msg.speaker === 'them' ? myLang : theirLang;
@@ -68,6 +87,8 @@ export default function ConversationScreen({ navigation }: Props) {
           text,
           fromLanguage: fromLang.name,
           toLanguage: toLang.name,
+          myLanguage: myLang.name,
+          theirLanguage: theirLang.name,
           conversationContext: briefing.context,
           history: messages,
           groqApiKey,
@@ -89,17 +110,35 @@ export default function ConversationScreen({ navigation }: Props) {
       };
 
       addMessage(msg);
+      const newMessages = [...messages, msg];
+
+      // Update suggestions based on who just spoke
+      updateSuggestions(newMessages, speaker);
+
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
 
-      // Auto-speak the translation
+      // AUDIO LOGIC FOR THE DIRECTOR (YOU)
       if (ttsEnabled) {
-        await speakTranslation(msg);
+        if (speaker === 'them') {
+          // They spoke: Speak the ENGLISH translation into your earpiece
+          await speak(msg.translated, myLang.value);
+        } else {
+          // You selected a suggestion: Speak the HINDI/TELUGU translation into your earpiece
+          // so you know how to say it out loud to them.
+          await speak(msg.translated, theirLang.value);
+        }
       }
     } catch (e: any) {
       setError(e?.message ?? 'Translation failed.');
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSuggestionPress(suggestion: string) {
+    if (isProcessing) return;
+    setInputText('');
+    await handleTranslateText(suggestion, 'me');
   }
 
   async function handleSendText() {
@@ -109,35 +148,76 @@ export default function ConversationScreen({ navigation }: Props) {
     await handleTranslateText(text, activeSpeaker);
   }
 
-  async function handleMicPressIn() {
+  const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isVADActiveRef = useRef(false);
+
+  async function handleMicToggle() {
     if (isProcessing) return;
-    stopSpeech();
-    setSpeakingId(null);
-    setError('');
-    try {
-      await startRecording();
-    } catch (e: any) {
-      setError(e?.message ?? JSON.stringify(e) ?? 'Unknown mic error');
+
+    if (isRecording) {
+      // STOP RECORDING
+      isVADActiveRef.current = false;
+      if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
+      await processRecording();
+    } else {
+      // START RECORDING
+      stopSpeech();
+      setSpeakingId(null);
+      setError('');
+      try {
+        await startRecording();
+        isVADActiveRef.current = true;
+        startHandsFreeLoop();
+      } catch (e: any) {
+        setError(e?.message ?? JSON.stringify(e) ?? 'Failed to start microphone.');
+      }
     }
   }
 
-  async function handleMicPressOut() {
-    if (recorderState !== 'recording') return;
+  function startHandsFreeLoop() {
+    if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
+    vadIntervalRef.current = setInterval(async () => {
+      if (isVADActiveRef.current) {
+        await processRecording(true);
+      }
+    }, 5000); // 5 second chunks — responsive enough for natural speech
+  }
+
+  async function processRecording(autoRestart = false) {
     try {
       const uri = await stopRecording();
-      if (!uri) return;
+      if (!uri) {
+        if (autoRestart && isVADActiveRef.current) await startRecording();
+        return;
+      }
 
       setLoading(true);
-      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
-      if (!text) { setLoading(false); return; }
+      // Restart immediately to minimise gaps — new chunk captures next utterance
+      // while we transcribe the previous one
+      if (autoRestart && isVADActiveRef.current) await startRecording();
 
-      const speaker: ActiveSpeaker = detectedLanguage === myLang.value ? 'me' : 'them';
+      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
+      if (!text) {
+        setLoading(false);
+        return;
+      }
+
+      const isMyLang = detectedLanguage.toLowerCase().startsWith(myLang.value.toLowerCase().split('-')[0]);
+      const speaker: ActiveSpeaker = isMyLang ? 'me' : 'them';
+      setLastDetectedSpeaker(speaker);
+
       await handleTranslateText(text, speaker);
     } catch (e: any) {
+      console.error('Hands-free error:', e);
       setError(e?.message ?? 'Transcription failed.');
+      // Stop the loop on error so it doesn't keep retrying endlessly
+      isVADActiveRef.current = false;
+      if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
+    } finally {
       setLoading(false);
     }
   }
+
 
   async function handleReplay(msg: Message) {
     if (speakingId) {
@@ -155,14 +235,27 @@ export default function ConversationScreen({ navigation }: Props) {
     return (
       <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
         <View style={styles.bubbleHeader}>
-          <Text style={styles.bubbleSpeaker}>{isMe ? myLang.name : theirLang.name}</Text>
+          <Text style={styles.bubbleSpeaker}>
+            {isMe ? `YOU (${myLang.name})` : `THEM (${theirLang.name})`}
+          </Text>
           <TouchableOpacity onPress={() => handleReplay(item)} style={styles.replayBtn}>
             <Text style={styles.replayIcon}>{isSpeaking ? '⏹' : '▶'}</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Original Speech (smaller/subtle) */}
         <Text style={styles.bubbleOriginal}>{item.original}</Text>
+
         <View style={styles.divider} />
-        <Text style={styles.bubbleTranslated}>{item.translated}</Text>
+
+        {/* Translation (Large & Clear for reading) */}
+        <Text style={styles.bubbleTranslated}>
+          {item.translated}
+        </Text>
+
+        <Text style={styles.scriptHint}>
+          {isMe ? `READ THIS OUT LOUD` : `THEY SAID THIS`}
+        </Text>
       </View>
     );
   }
@@ -191,28 +284,59 @@ export default function ConversationScreen({ navigation }: Props) {
 
         {briefing.context ? (
           <View style={styles.contextBadge}>
-            <Text style={styles.contextText}>{briefing.context}</Text>
+            <ScrollView style={{ maxHeight: 80 }}>
+              <Text style={styles.contextText}>
+                <Text style={{ fontWeight: '700', color: '#6c63ff' }}>CONTEXT: </Text>
+                {briefing.context}
+              </Text>
+            </ScrollView>
           </View>
         ) : null}
 
         {/* Messages */}
-        <FlatList
-          ref={listRef}
-          data={messages}
-          keyExtractor={item => item.id}
-          renderItem={renderMessage}
-          contentContainerStyle={styles.messageList}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>Conversation will appear here</Text>
-              <Text style={styles.emptySubText}>
-                {micEnabled ? 'Hold the mic button to speak' : 'Type what was said and tap send'}
-              </Text>
-            </View>
-          }
-        />
+        <View style={{ flex: 1 }}>
+          <FlatList
+            ref={listRef}
+            data={messages}
+            keyExtractor={item => item.id}
+            renderItem={renderMessage}
+            contentContainerStyle={styles.messageList}
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyText}>Conversation will appear here</Text>
+                <Text style={styles.emptySubText}>
+                  {micEnabled ? 'Tap the mic to start listening' : 'Type what was said and tap send'}
+                </Text>
+              </View>
+            }
+          />
+        </View>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        {/* Suggestions Section — always visible when suggestions exist */}
+        {suggestions.length > 0 && (
+          <View style={styles.suggestionsContainer}>
+            <Text style={styles.suggestionsLabel}>
+              {lastDetectedSpeaker === 'them'
+                ? `YOU SHOULD SAY (${myLang.name}):`
+                : lastDetectedSpeaker === 'me'
+                ? `THEY MIGHT SAY (${theirLang.name}):`
+                : 'SUGGESTED REPLIES:'}
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
+              {suggestions.map((s, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[styles.suggestionChip, lastDetectedSpeaker === 'me' && styles.suggestionChipPrediction]}
+                  onPress={() => lastDetectedSpeaker !== 'me' && handleSuggestionPress(s)}
+                >
+                  <Text style={styles.suggestionText}>{s}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Speaker toggle — text mode only */}
         {!micEnabled && (
@@ -243,16 +367,22 @@ export default function ConversationScreen({ navigation }: Props) {
               <View style={styles.micHint}>
                 {isProcessing ? (
                   <ActivityIndicator color="#6c63ff" />
+                ) : isRecording ? (
+                  <View style={styles.listeningRow}>
+                    <View style={styles.listeningDot} />
+                    <Text style={styles.micHintText}>
+                      {lastDetectedSpeaker
+                        ? `Last: ${lastDetectedSpeaker === 'me' ? myLang.name : theirLang.name} detected`
+                        : 'Listening...'}
+                    </Text>
+                  </View>
                 ) : (
-                  <Text style={styles.micHintText}>
-                    {isRecording ? 'Release to translate...' : 'Hold mic to speak'}
-                  </Text>
+                  <Text style={styles.micHintText}>Tap mic — hands-free mode</Text>
                 )}
               </View>
               <Pressable
                 style={[styles.micBtn, isRecording && styles.micBtnActive]}
-                onPressIn={handleMicPressIn}
-                onPressOut={handleMicPressOut}
+                onPress={handleMicToggle}
                 disabled={isProcessing}
               >
                 <Text style={styles.micBtnIcon}>{isRecording ? '⏹' : '🎙'}</Text>
@@ -315,7 +445,11 @@ const styles = StyleSheet.create({
     borderColor: '#2a2a4a',
   },
   contextText: { color: '#888', fontSize: 12 },
-  messageList: { padding: 16, paddingBottom: 8 },
+  messageList: {
+    padding: 16,
+    paddingBottom: 200, // Extra padding so content isn't hidden by bottom bar
+    flexGrow: 1,
+  },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
   emptyText: { color: '#444', fontSize: 16, fontWeight: '600' },
   emptySubText: { color: '#333', fontSize: 13, marginTop: 6, textAlign: 'center' },
@@ -332,9 +466,10 @@ const styles = StyleSheet.create({
   bubbleSpeaker: { fontSize: 11, color: '#666', fontWeight: '600', textTransform: 'uppercase' },
   replayBtn: { padding: 4 },
   replayIcon: { fontSize: 13, color: '#6c63ff' },
-  bubbleOriginal: { color: '#ccc', fontSize: 15 },
+  bubbleOriginal: { color: '#aaa', fontSize: 13, fontStyle: 'italic' },
   divider: { height: 1, backgroundColor: '#2a2a3e', marginVertical: 8 },
-  bubbleTranslated: { color: '#fff', fontSize: 15, fontWeight: '500' },
+  bubbleTranslated: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  scriptHint: { fontSize: 10, color: '#6c63ff', marginTop: 4, textTransform: 'uppercase', fontWeight: '700' },
   error: { color: '#ff6b6b', fontSize: 13, textAlign: 'center', marginHorizontal: 16, marginBottom: 8 },
   speakerToggle: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 8, gap: 8 },
   speakerBtn: {
@@ -391,4 +526,51 @@ const styles = StyleSheet.create({
   },
   micBtnActive: { backgroundColor: '#6c63ff33', borderColor: '#ff6b6b' },
   micBtnIcon: { fontSize: 28 },
+  suggestionsContainer: {
+    paddingVertical: 12,
+    backgroundColor: '#0a0a1a',
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+  },
+  suggestionsLabel: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    letterSpacing: 1,
+  },
+  suggestionsScroll: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  suggestionChip: {
+    backgroundColor: '#1a1a3e',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#6c63ff44',
+  },
+  suggestionChipPrediction: {
+    backgroundColor: '#1e2a1e',
+    borderColor: '#44aa6644',
+  },
+  suggestionText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  listeningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  listeningDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ff6b6b',
+  },
 });
