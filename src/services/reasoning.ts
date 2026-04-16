@@ -65,7 +65,8 @@ export async function translateWithReasoning({
   return result;
 }
 
-// Called only when the other person just spoke — generates reply suggestions for the user
+// Called only when the other person just spoke.
+// Acts as an agent for the user — generates responses that advance their goal.
 export async function generateSuggestions({
   history,
   conversationContext,
@@ -82,30 +83,44 @@ export async function generateSuggestions({
   const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
 
   const historyBlock = history.slice(-10).map(m =>
-    `${m.speaker === 'me' ? `You (${myLanguage})` : `Them (${theirLanguage})`}: ${m.original}`
+    `${m.speaker === 'me' ? `User (${myLanguage})` : `Other person (${theirLanguage})`}: ${m.original}`
   ).join('\n');
 
-  const systemPrompt = `You are a real-time conversation coach.
-${conversationContext ? `Context: ${conversationContext}` : ''}
+  const lastTheirMessage = history.filter(m => m.speaker === 'them').slice(-1)[0];
 
-The ${theirLanguage} speaker just spoke. Give the ${myLanguage} speaker 3 short, natural replies they can say out loud right now.
+  const systemPrompt = `You are an intelligent agent speaking on behalf of the user in a live conversation. Your only purpose is to help them achieve their goal.
+
+User's goal: ${conversationContext || 'Have a productive conversation'}
+
+The other person (${theirLanguage} speaker) just spoke. You must decide the 3 best things the user (${myLanguage} speaker) should say right now to move closer to their goal.
+
+How to think:
+- What does the user ultimately want from this conversation?
+- Does this latest message help or hinder that goal?
+- What response advances the user's position most effectively?
+- If they were asked a question, answer it in a way that serves the user's interests.
+- If an offer or statement was made, respond strategically, not just politely.
 
 Output rules:
-- Three phrases separated by " | " — nothing else. No numbering, no labels, no extra text.
-- Each phrase must be under 10 words and sound like something a real person would naturally say.
-- Directly respond to what was just said, using the conversation history for tone and context.
-- Example format: Sure, let me check that | I understand, can you clarify | That works for me`;
+- Three responses separated by " | " — nothing else. No labels, no numbering, no extra text.
+- Each response must be under 15 words and sound natural when spoken aloud.
+- Order them: most assertive/direct first, softer alternative second, clarifying question third.
+- Example for salary negotiation: I was expecting closer to 50,000 | Can we discuss the full package? | What is the range for this role?`;
 
-  const userPrompt = `Conversation:\n${historyBlock}\n\nGive 3 replies for the ${myLanguage} speaker:`;
+  const userPrompt = [
+    historyBlock ? `Conversation so far:\n${historyBlock}` : '',
+    lastTheirMessage ? `\nThey just said: "${lastTheirMessage.original}"` : '',
+    `\nWhat should the user say to advance their goal?`,
+  ].join('');
 
   const response = await client.chat.completions.create({
-    model: 'llama-3.1-8b-instant',
+    model: 'llama-3.3-70b-versatile',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
-    temperature: 0.6,
-    max_tokens: 120,
+    temperature: 0.5,
+    max_tokens: 150,
   });
 
   const content = response.choices[0]?.message?.content ?? '';

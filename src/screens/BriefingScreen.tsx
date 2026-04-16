@@ -24,6 +24,7 @@ export default function BriefingScreen({ navigation }: Props) {
   const [myLanguage, setMyLanguage] = useState<Language | null>(briefing.myLanguage);
   const [theirLanguage, setTheirLanguage] = useState<Language | null>(briefing.theirLanguage);
   const [context, setContext] = useState(briefing.context);
+  const [mode, setMode] = useState<'brief' | 'detailed'>(briefing.mode);
   const [localGroqKey, setLocalGroqKey] = useState(groqApiKey);
   const [pickerTarget, setPickerTarget] = useState<'mine' | 'theirs' | null>(null);
 
@@ -31,12 +32,17 @@ export default function BriefingScreen({ navigation }: Props) {
     myLanguage &&
     theirLanguage &&
     myLanguage.value !== theirLanguage.value &&
-    (translationMode === 'free' || localGroqKey.trim().length > 0);
+    (translationMode === 'free' || localGroqKey.trim().length > 0) &&
+    (mode === 'detailed' || context.trim().length > 0);
 
   function handleStart() {
-    setBriefing({ myLanguage, theirLanguage, context });
+    setBriefing({ myLanguage, theirLanguage, context, mode });
     setGroqApiKey(localGroqKey.trim());
-    navigation.navigate('Conversation');
+    if (mode === 'detailed') {
+      navigation.navigate('DetailedBriefing' as any);
+    } else {
+      navigation.navigate('Conversation');
+    }
   }
 
   function selectLanguage(lang: Language) {
@@ -70,17 +76,48 @@ export default function BriefingScreen({ navigation }: Props) {
           <Text style={styles.error}>Languages must be different</Text>
         )}
 
-        {/* Context */}
-        <Text style={styles.label}>Conversation context <Text style={styles.optional}>(optional)</Text></Text>
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          placeholder="e.g. Job interview, doctor's appointment, tourist asking for directions..."
-          placeholderTextColor="#999"
-          multiline
-          numberOfLines={3}
-          value={context}
-          onChangeText={setContext}
-        />
+        {/* Briefing Mode Selection */}
+        <Text style={styles.label}>Briefing Mode</Text>
+        <View style={styles.modeToggle}>
+          <TouchableOpacity
+            style={[styles.modeBtn, mode === 'brief' && styles.modeBtnActive]}
+            onPress={() => setMode('brief')}
+          >
+            <Text style={[styles.modeBtnText, mode === 'brief' && styles.modeBtnTextActive]}>
+              Brief
+            </Text>
+            <Text style={[styles.modeBtnSub, mode === 'brief' && styles.modeBtnSubActive]}>
+              Quick summary
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modeBtn, mode === 'detailed' && styles.modeBtnActive]}
+            onPress={() => setMode('detailed')}
+          >
+            <Text style={[styles.modeBtnText, mode === 'detailed' && styles.modeBtnTextActive]}>
+              Detailed
+            </Text>
+            <Text style={[styles.modeBtnSub, mode === 'detailed' && styles.modeBtnSubActive]}>
+              To-and-fro interview
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Context - Only show if mode is brief */}
+        {mode === 'brief' && (
+          <>
+            <Text style={styles.label}>Your goal</Text>
+            <TextInput
+              style={[styles.input, styles.textArea]}
+              placeholder="e.g. I'm in a job interview and want to negotiate a salary of at least €50,000. I have 5 years of experience."
+              placeholderTextColor="#999"
+              multiline
+              numberOfLines={3}
+              value={context}
+              onChangeText={setContext}
+            />
+          </>
+        )}
 
         {/* Translation mode toggle */}
         <Text style={styles.label}>Translation mode</Text>
