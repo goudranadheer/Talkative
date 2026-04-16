@@ -46,19 +46,34 @@ export default function ConversationScreen({ navigation }: Props) {
   const isRecording = recorderState === 'recording';
   const isProcessing = recorderState === 'processing' || loading;
 
-  async function updateSuggestions(currentMessages: Message[]) {
-    try {
-      const sugs = await generateSuggestions({
-        history: currentMessages,
-        conversationContext: briefing.context,
-        myLanguage: myLang.name,
-        theirLanguage: theirLang.name,
-        groqApiKey,
-      });
-      setSuggestions(sugs);
-    } catch (e) {
-      console.error('Failed to update suggestions:', e);
-    }
+  // Debounce suggestion generation — waits 1.5s after the last chunk
+  // so suggestions only fire once after the other person stops talking,
+  // not once per 5-second recording chunk while they are mid-sentence.
+  const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingMessagesRef = useRef<Message[]>([]);
+
+  function scheduleSuggestions(currentMessages: Message[]) {
+    pendingMessagesRef.current = currentMessages;
+    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
+    suggestionTimerRef.current = setTimeout(async () => {
+      try {
+        const sugs = await generateSuggestions({
+          history: pendingMessagesRef.current,
+          conversationContext: briefing.context,
+          myLanguage: myLang.name,
+          theirLanguage: theirLang.name,
+          groqApiKey,
+        });
+        setSuggestions(sugs);
+      } catch (e) {
+        console.error('Failed to update suggestions:', e);
+      }
+    }, 1500);
+  }
+
+  function cancelSuggestions() {
+    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
+    setSuggestions([]);
   }
 
   async function speakTranslation(msg: Message) {
@@ -112,11 +127,11 @@ export default function ConversationScreen({ navigation }: Props) {
       const newMessages = [...messages, msg];
 
       if (speaker === 'them') {
-        // Other person spoke — generate reply suggestions for the user
-        updateSuggestions(newMessages);
+        // Other person spoke — schedule suggestions after a pause
+        scheduleSuggestions(newMessages);
       } else {
-        // User spoke — clear suggestions so the panel doesn't show stale chips
-        setSuggestions([]);
+        // User responded — cancel any pending suggestion and clear panel
+        cancelSuggestions();
       }
 
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
@@ -161,6 +176,7 @@ export default function ConversationScreen({ navigation }: Props) {
       // STOP RECORDING
       isVADActiveRef.current = false;
       if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
+      if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
       await processRecording();
     } else {
       // START RECORDING
