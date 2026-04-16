@@ -168,14 +168,16 @@ export default function ConversationScreen({ navigation }: Props) {
     // Translate suggestion and speak it in the other person's language
     await handleTranslateText(suggestion, 'me');
 
-    // Resume listening after TTS finishes + 1s buffer for the user to finish speaking
+    // Resume listening after TTS finishes + 5s buffer.
+    // The user needs time to actually say the sentence to the other person.
+    // Too short = mic picks up the user speaking and re-translates it.
     if (wasMicOn) {
       setTimeout(async () => {
         setMicPaused(false);
         try {
           await startRecording(handleSilenceDetected);
         } catch (e) {}
-      }, 1000);
+      }, 5000);
     }
   }
 
@@ -279,26 +281,26 @@ export default function ConversationScreen({ navigation }: Props) {
       <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
         <View style={styles.bubbleHeader}>
           <Text style={styles.bubbleSpeaker}>
-            {isMe ? `YOU (${myLang.name})` : `THEM (${theirLang.name})`}
+            {isMe ? `SAY THIS IN ${theirLang.name.toUpperCase()}` : `THEM (${theirLang.name})`}
           </Text>
           <TouchableOpacity onPress={() => handleReplay(item)} style={styles.replayBtn}>
             <Text style={styles.replayIcon}>{isSpeaking ? '⏹' : '▶'}</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Original Speech (smaller/subtle) */}
-        <Text style={styles.bubbleOriginal}>{item.original}</Text>
-
-        <View style={styles.divider} />
-
-        {/* Translation (Large & Clear for reading) */}
-        <Text style={styles.bubbleTranslated}>
-          {item.translated}
-        </Text>
-
-        <Text style={styles.scriptHint}>
-          {isMe ? `SAY THIS IN ${theirLang.name.toUpperCase()}` : `THEY SAID THIS`}
-        </Text>
+        {isMe ? (
+          // Your response — show only the translation (what to say aloud)
+          // No need to repeat the original chip text the user already read
+          <Text style={styles.bubbleTranslated}>{item.translated}</Text>
+        ) : (
+          // Other person — show what they said + your language translation
+          <>
+            <Text style={styles.bubbleOriginal}>{item.original}</Text>
+            <View style={styles.divider} />
+            <Text style={styles.bubbleTranslated}>{item.translated}</Text>
+            <Text style={styles.scriptHint}>THEY SAID THIS</Text>
+          </>
+        )}
       </View>
     );
   }
