@@ -65,51 +65,38 @@ export async function translateWithReasoning({
   return result;
 }
 
+// Called only when the other person just spoke — generates reply suggestions for the user
 export async function generateSuggestions({
   history,
   conversationContext,
   myLanguage,
   theirLanguage,
-  lastSpeaker,
   groqApiKey,
 }: {
   history: Message[];
   conversationContext: string;
   myLanguage: string;
   theirLanguage: string;
-  lastSpeaker: 'me' | 'them';
   groqApiKey: string;
 }): Promise<string[]> {
   const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
 
   const historyBlock = history.slice(-10).map(m =>
-    `${m.speaker === 'me' ? `User (${myLanguage})` : `Other (${theirLanguage})`}: ${m.original}`
+    `${m.speaker === 'me' ? `You (${myLanguage})` : `Them (${theirLanguage})`}: ${m.original}`
   ).join('\n');
 
-  const systemPrompt = lastSpeaker === 'them'
-    ? `You are a real-time conversation coach.
+  const systemPrompt = `You are a real-time conversation coach.
 ${conversationContext ? `Context: ${conversationContext}` : ''}
 
-The ${theirLanguage} speaker just spoke. Give the ${myLanguage} speaker 3 short, natural replies they can say right now.
+The ${theirLanguage} speaker just spoke. Give the ${myLanguage} speaker 3 short, natural replies they can say out loud right now.
 
 Output rules:
 - Three phrases separated by " | " — nothing else. No numbering, no labels, no extra text.
-- Each phrase must be under 10 words and sound like something a real person would say.
+- Each phrase must be under 10 words and sound like something a real person would naturally say.
 - Directly respond to what was just said, using the conversation history for tone and context.
-- Example format: Sure, let me check that | I understand, can you clarify | That works for me`
-    : `You are a real-time conversation coach.
-${conversationContext ? `Context: ${conversationContext}` : ''}
+- Example format: Sure, let me check that | I understand, can you clarify | That works for me`;
 
-The ${myLanguage} speaker just spoke. Predict 3 likely things the ${theirLanguage} speaker will say next so the user can mentally prepare.
-
-Output rules:
-- Three phrases separated by " | " — nothing else. No numbering, no labels, no extra text.
-- Each phrase must be under 10 words and reflect realistic responses given the context.
-- Example format: When can you start? | Do you have references? | What are your expectations?`;
-
-  const userPrompt = lastSpeaker === 'them'
-    ? `Conversation:\n${historyBlock}\n\nGive 3 replies for the ${myLanguage} speaker:`
-    : `Conversation:\n${historyBlock}\n\nPredict 3 things the ${theirLanguage} speaker might say next:`;
+  const userPrompt = `Conversation:\n${historyBlock}\n\nGive 3 replies for the ${myLanguage} speaker:`;
 
   const response = await client.chat.completions.create({
     model: 'llama-3.1-8b-instant',

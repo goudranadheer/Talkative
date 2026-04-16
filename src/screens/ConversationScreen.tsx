@@ -46,14 +46,13 @@ export default function ConversationScreen({ navigation }: Props) {
   const isRecording = recorderState === 'recording';
   const isProcessing = recorderState === 'processing' || loading;
 
-  async function updateSuggestions(currentMessages: Message[], lastSpeaker: ActiveSpeaker) {
+  async function updateSuggestions(currentMessages: Message[]) {
     try {
       const sugs = await generateSuggestions({
         history: currentMessages,
         conversationContext: briefing.context,
         myLanguage: myLang.name,
         theirLanguage: theirLang.name,
-        lastSpeaker,
         groqApiKey,
       });
       setSuggestions(sugs);
@@ -112,8 +111,13 @@ export default function ConversationScreen({ navigation }: Props) {
       addMessage(msg);
       const newMessages = [...messages, msg];
 
-      // Update suggestions based on who just spoke
-      updateSuggestions(newMessages, speaker);
+      if (speaker === 'them') {
+        // Other person spoke — generate reply suggestions for the user
+        updateSuggestions(newMessages);
+      } else {
+        // User spoke — clear suggestions so the panel doesn't show stale chips
+        setSuggestions([]);
+      }
 
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
 
@@ -314,22 +318,16 @@ export default function ConversationScreen({ navigation }: Props) {
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {/* Suggestions Section — always visible when suggestions exist */}
+        {/* Suggestions — only shown after the other person speaks */}
         {suggestions.length > 0 && (
           <View style={styles.suggestionsContainer}>
-            <Text style={styles.suggestionsLabel}>
-              {lastDetectedSpeaker === 'them'
-                ? `YOU SHOULD SAY (${myLang.name}):`
-                : lastDetectedSpeaker === 'me'
-                ? `THEY MIGHT SAY (${theirLang.name}):`
-                : 'SUGGESTED REPLIES:'}
-            </Text>
+            <Text style={styles.suggestionsLabel}>REPLY WITH ({myLang.name}):</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
               {suggestions.map((s, idx) => (
                 <TouchableOpacity
                   key={idx}
-                  style={[styles.suggestionChip, lastDetectedSpeaker === 'me' && styles.suggestionChipPrediction]}
-                  onPress={() => lastDetectedSpeaker !== 'me' && handleSuggestionPress(s)}
+                  style={styles.suggestionChip}
+                  onPress={() => handleSuggestionPress(s)}
                 >
                   <Text style={styles.suggestionText}>{s}</Text>
                 </TouchableOpacity>
