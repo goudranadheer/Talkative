@@ -29,14 +29,19 @@ export async function translateWithReasoning({
     `${m.speaker === 'me' ? myLanguage : theirLanguage}: "${m.original}" → "${m.translated}"`
   ).join('\n');
 
-  const systemPrompt = `You are a real-time conversation translator.
-Translate from ${fromLanguage} to ${toLanguage}.
-${conversationContext ? `Context: ${conversationContext}` : ''}
-Output ONLY the translated text. No explanations, no quotes, no reasoning in your final answer.`;
+  const systemPrompt = [
+    `You are a precise real-time translator. Your only task is to translate the given text from ${fromLanguage} to ${toLanguage}.`,
+    conversationContext ? `Conversation context: ${conversationContext}` : '',
+    `Rules:
+- Output the translation and NOTHING else. No labels, no quotes, no explanations, no preamble.
+- Preserve the speaker's tone, formality level, and intent exactly.
+- If an idiom or phrase has no direct equivalent, use the most natural expression in ${toLanguage}.
+- Never translate names, brand names, or numbers — keep them as-is.`,
+  ].filter(Boolean).join('\n\n');
 
   const userMessage = [
-    historyBlock ? `Recent conversation:\n${historyBlock}\n` : '',
-    `Translate this to ${toLanguage}:\n"${text}"`,
+    historyBlock ? `Conversation so far:\n${historyBlock}\n` : '',
+    `Translate to ${toLanguage}: ${text}`,
   ].join('');
 
   const response = await client.chat.completions.create({
@@ -45,13 +50,17 @@ Output ONLY the translated text. No explanations, no quotes, no reasoning in you
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ],
-    max_tokens: 1024,
+    max_tokens: 256,
+    temperature: 0,
   });
 
   let result = response.choices[0]?.message?.content ?? '';
 
-  // Strip <think>...</think> reasoning blocks from DeepSeek R1 output
-  result = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  // Strip any model preamble the LLM occasionally adds despite instructions
+  result = result
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/^(translation|translated text|here is the translation)[:\s]+/i, '')
+    .trim();
 
   return result;
 }
@@ -78,28 +87,29 @@ export async function generateSuggestions({
   ).join('\n');
 
   const systemPrompt = lastSpeaker === 'them'
-    ? `You are an elite conversation coach.
-Context: ${conversationContext}
+    ? `You are a real-time conversation coach.
+${conversationContext ? `Context: ${conversationContext}` : ''}
 
-The ${theirLanguage} speaker just spoke. Suggest 3 smart, natural replies the user (${myLanguage} speaker) should say next.
+The ${theirLanguage} speaker just spoke. Give the ${myLanguage} speaker 3 short, natural replies they can say right now.
 
-Guidelines:
-1. Directly address what the other person just said.
-2. Keep each suggestion under 10 words.
-3. Format exactly: Suggestion 1 | Suggestion 2 | Suggestion 3`
-    : `You are an elite conversation coach.
-Context: ${conversationContext}
+Output rules:
+- Three phrases separated by " | " — nothing else. No numbering, no labels, no extra text.
+- Each phrase must be under 10 words and sound like something a real person would say.
+- Directly respond to what was just said, using the conversation history for tone and context.
+- Example format: Sure, let me check that | I understand, can you clarify | That works for me`
+    : `You are a real-time conversation coach.
+${conversationContext ? `Context: ${conversationContext}` : ''}
 
-The user (${myLanguage} speaker) just spoke. Predict 3 likely things the ${theirLanguage} speaker might say next, so the user can prepare.
+The ${myLanguage} speaker just spoke. Predict 3 likely things the ${theirLanguage} speaker will say next so the user can mentally prepare.
 
-Guidelines:
-1. Base predictions on the conversation flow and context.
-2. Keep each prediction under 10 words.
-3. Format exactly: Suggestion 1 | Suggestion 2 | Suggestion 3`;
+Output rules:
+- Three phrases separated by " | " — nothing else. No numbering, no labels, no extra text.
+- Each phrase must be under 10 words and reflect realistic responses given the context.
+- Example format: When can you start? | Do you have references? | What are your expectations?`;
 
   const userPrompt = lastSpeaker === 'them'
-    ? `History:\n${historyBlock}\n\nWhat should I (${myLanguage}) say next?`
-    : `History:\n${historyBlock}\n\nWhat might the ${theirLanguage} speaker say next?`;
+    ? `Conversation:\n${historyBlock}\n\nGive 3 replies for the ${myLanguage} speaker:`
+    : `Conversation:\n${historyBlock}\n\nPredict 3 things the ${theirLanguage} speaker might say next:`;
 
   const response = await client.chat.completions.create({
     model: 'llama-3.1-8b-instant',
@@ -107,10 +117,18 @@ Guidelines:
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
-    temperature: 0.7,
+    temperature: 0.6,
+    max_tokens: 120,
   });
 
   const content = response.choices[0]?.message?.content ?? '';
-  return content.split('|').map(s => s.trim().replace(/^Suggestion \d+: /i, '').replace(/^"/, '').replace(/"$/, ''));
+  return content
+    .split('|')
+    .map(s => s.trim()
+      .replace(/^(suggestion|reply|response|option|prediction)\s*\d*[:.]\s*/i, '')
+      .replace(/^["']|["']$/g, '')
+    )
+    .filter(s => s.length > 0)
+    .slice(0, 3);
 }
 

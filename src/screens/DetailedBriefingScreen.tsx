@@ -33,31 +33,36 @@ export default function DetailedBriefingScreen({ navigation }: Props) {
   const flatListRef = useRef<FlatList>(null);
   const client = useMemo(() => new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true }), [groqApiKey]);
 
+  const systemPrompt = `You are a sharp, experienced conversation coach preparing a ${briefing.myLanguage?.name} speaker for a live conversation with a ${briefing.theirLanguage?.name} speaker.
+
+Your role across this interview:
+1. Understand the user's goal and the full context of the meeting.
+2. Identify the most likely questions, objections, or scenarios the ${briefing.theirLanguage?.name} speaker will raise.
+3. Drill the user with specific "What if they say..." challenges to surface any weak points.
+4. Extract key details: names, numbers, constraints, non-negotiables.
+5. After 4-6 focused exchanges, once you have a complete picture, summarise the strategy clearly and end your message with exactly: "You are ready. Tap Ready to begin."
+
+Rules:
+- Ask only ONE focused question per message — never multiple at once.
+- Always respond in ${briefing.myLanguage?.name}.
+- Be direct and efficient. This is pre-game preparation, not a therapy session.`;
+
   useEffect(() => {
-    // Initial message from AI
     const startInterview = async () => {
       setLoading(true);
-      const prompt = `You are a professional conversation coach and strategist.
-      The user is about to have a conversation with a ${briefing.theirLanguage?.name} speaker.
-      Your job is to interview the user in ${briefing.myLanguage?.name} to build a comprehensive mental model of this encounter.
-
-      You must:
-      1. Understand the high-level context and goals.
-      2. PROACTIVELY anticipate what the ${briefing.theirLanguage?.name} speaker might ask or say to the user.
-      3. Help the user prepare for those specific scenarios.
-      4. Gather any critical details (names, numbers, specific constraints).
-
-      Start by asking a broad question about the situation, but show that you are already thinking about what the other person might bring up.`;
-
       try {
         const response = await client.chat.completions.create({
-          model: 'llama-3.1-8b-instant',
-          messages: [{ role: 'system', content: prompt }],
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: 'Start the interview.' },
+          ],
+          max_tokens: 300,
         });
-        const content = response.choices[0]?.message?.content || "Tell me more about who you're meeting and what you want to achieve.";
+        const content = response.choices[0]?.message?.content || "Tell me — who are you meeting and what do you need to achieve from this conversation?";
         setMessages([{ role: 'assistant', content }]);
       } catch (e) {
-        setMessages([{ role: 'assistant', content: "Let's start. Who are you meeting and what is your goal for this conversation?" }]);
+        setMessages([{ role: 'assistant', content: "Tell me — who are you meeting and what do you need to achieve from this conversation?" }]);
       } finally {
         setLoading(false);
       }
@@ -76,15 +81,12 @@ export default function DetailedBriefingScreen({ navigation }: Props) {
 
     try {
       const response = await client.chat.completions.create({
-        model: 'llama-3.1-8b-instant',
+        model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: `You are a conversation coach. Based on the user's input, dive deeper.
-          Identify potential "friction points" or questions the ${briefing.theirLanguage?.name} speaker might ask.
-          Challenge the user with "What if they say..." or "How would you respond if they ask about..." scenarios.
-          Continue the interview until you have a rock-solid understanding of the likely flow of the conversation.
-          When you have enough info, provide a summary of your strategy and tell the user they are ready to 'Ready'.` },
-          ...newMessages
+          { role: 'system', content: systemPrompt },
+          ...newMessages,
         ],
+        max_tokens: 400,
       });
       const aiContent = response.choices[0]?.message?.content || "";
       setMessages([...newMessages, { role: 'assistant', content: aiContent }]);
