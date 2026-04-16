@@ -38,14 +38,33 @@ export default function ConversationScreen({ navigation }: Props) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [lastDetectedSpeaker, setLastDetectedSpeaker] = useState<ActiveSpeaker | null>(null);
   const listRef = useRef<FlatList>(null);
-  const { state: recorderState, startRecording, stopRecording, cancelRecording } = useAudioRecorder();
-  const [micPaused, setMicPaused] = useState(false); // true while user is speaking their response
+  const { state: recorderState, startRecording, stopRecording } = useAudioRecorder();
+
+  // Stores the translated text of the last suggestion the user tapped (in their language),
+  // so processRecording can compare transcriptions against it and filter out the user's own voice.
+  const lastSuggestionRef = useRef<string | null>(null);
+  const lastSuggestionClearRef = useRef<NodeJS.Timeout | null>(null);
 
   const myLang = briefing.myLanguage!;
   const theirLang = briefing.theirLanguage!;
   const micEnabled = groqApiKey.trim().length > 0;
   const isRecording = recorderState === 'recording';
   const isProcessing = recorderState === 'processing' || loading;
+
+  // Returns true if the transcribed text is close enough to the last suggestion
+  // that the mic almost certainly picked up the user reading the chip aloud.
+  // Uses word overlap: ≥50% of transcribed words appear in the suggestion → same sentence.
+  function isSimilarToSuggestion(transcribed: string): boolean {
+    const stored = lastSuggestionRef.current;
+    if (!stored) return false;
+    const normalize = (s: string) =>
+      s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').split(/\s+/).filter(Boolean);
+    const tWords = normalize(transcribed);
+    const sWords = new Set(normalize(stored));
+    if (tWords.length === 0) return false;
+    const matches = tWords.filter(w => sWords.has(w)).length;
+    return matches / tWords.length >= 0.5;
+  }
 
   // Debounce suggestion generation — waits 1.5s after the last chunk
   // so suggestions only fire once after the other person stops talking,
@@ -131,7 +150,15 @@ export default function ConversationScreen({ navigation }: Props) {
         // Other person spoke — schedule suggestions after a pause
         scheduleSuggestions(newMessages);
       } else {
-        // User responded — cancel any pending suggestion and clear panel
+        // User tapped a suggestion — store its translation so the mic can
+        // recognise and ignore the user reading it aloud.
+        if (lastSuggestionClearRef.current) clearTimeout(lastSuggestionClearRef.current);
+        lastSuggestionRef.current = msg.translated;
+        lastSuggestionClearRef.current = setTimeout(() => {
+          lastSuggestionRef.current = null;
+        }, 15000);
+
+        // Cancel any pending suggestion and clear the panel
         cancelSuggestions();
       }
 
@@ -157,28 +184,9 @@ export default function ConversationScreen({ navigation }: Props) {
   async function handleSuggestionPress(suggestion: string) {
     if (isProcessing) return;
     setInputText('');
-
-    // Stop mic immediately — don't let it pick up the user reading the suggestion aloud
-    const wasMicOn = isRecording;
-    if (wasMicOn) {
-      await cancelRecording();
-      setMicPaused(true);
-    }
-
-    // Translate suggestion and speak it in the other person's language
+    // Mic keeps running — similarity check in processRecording will ignore
+    // any transcription that matches what the user reads aloud.
     await handleTranslateText(suggestion, 'me');
-
-    // Resume listening after TTS finishes + 5s buffer.
-    // The user needs time to actually say the sentence to the other person.
-    // Too short = mic picks up the user speaking and re-translates it.
-    if (wasMicOn) {
-      setTimeout(async () => {
-        setMicPaused(false);
-        try {
-          await startRecording(handleSilenceDetected);
-        } catch (e) {}
-      }, 5000);
-    }
   }
 
   async function handleSendText() {
@@ -199,12 +207,11 @@ export default function ConversationScreen({ navigation }: Props) {
   async function handleMicToggle() {
     if (isProcessing) return;
 
-    if (isRecording || micPaused) {
+    if (isRecording) {
       // End the hands-free session
       micActiveRef.current = false;
-      setMicPaused(false);
       if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
-      if (isRecording) await processRecording();
+      await processRecording();
     } else {
       // Start the hands-free session
       micActiveRef.current = true;
@@ -241,12 +248,19 @@ export default function ConversationScreen({ navigation }: Props) {
       // Use Whisper's detected language to figure out who spoke.
       // Their language → other person → translate to user's language + suggestions.
       // User's language → user is speaking (e.g. reading a suggestion aloud) → ignore.
-      const theirLangCode = theirLang.value.toLowerCase().split('-')[0];
-      const myLangCode    = myLang.value.toLowerCase().split('-')[0];
-      const detected      = detectedLanguage.toLowerCase().split('-')[0];
+      const myLangCode = myLang.value.toLowerCase().split('-')[0];
+      const detected   = detectedLanguage.toLowerCase().split('-')[0];
 
       if (detected === myLangCode) {
         // User spoke in their own language — not relevant, keep listening
+        setLoading(false);
+        return;
+      }
+
+      // Check if this transcription is the user reading back the last suggestion aloud.
+      // If it closely matches the stored suggestion translation, discard it silently.
+      if (isSimilarToSuggestion(text)) {
+        lastSuggestionRef.current = null; // consumed — clear so next utterance is fresh
         setLoading(false);
         return;
       }
@@ -406,10 +420,6 @@ export default function ConversationScreen({ navigation }: Props) {
               <View style={styles.micHint}>
                 {isProcessing ? (
                   <ActivityIndicator color="#6c63ff" />
-                ) : micPaused ? (
-                  <Text style={styles.micHintPaused}>
-                    Say it aloud — resuming in a moment...
-                  </Text>
                 ) : isRecording ? (
                   <View style={styles.listeningRow}>
                     <View style={styles.listeningDot} />
@@ -422,11 +432,11 @@ export default function ConversationScreen({ navigation }: Props) {
                 )}
               </View>
               <Pressable
-                style={[styles.micBtn, (isRecording || micPaused) && styles.micBtnActive]}
+                style={[styles.micBtn, isRecording && styles.micBtnActive]}
                 onPress={handleMicToggle}
                 disabled={isProcessing}
               >
-                <Text style={styles.micBtnIcon}>{(isRecording || micPaused) ? '⏹' : '🎙'}</Text>
+                <Text style={styles.micBtnIcon}>{isRecording ? '⏹' : '🎙'}</Text>
               </Pressable>
             </>
           ) : (
@@ -555,7 +565,6 @@ const styles = StyleSheet.create({
   sendBtnText: { color: '#fff', fontSize: 22, fontWeight: '700' },
   micHint: { flex: 1, alignItems: 'center' },
   micHintText: { color: '#555', fontSize: 14 },
-  micHintPaused: { color: '#6c63ff', fontSize: 13, fontStyle: 'italic' },
   micBtn: {
     width: 64,
     height: 64,
