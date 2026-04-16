@@ -4,32 +4,28 @@ import { Alert, Linking } from 'react-native';
 
 type RecorderState = 'idle' | 'recording' | 'processing';
 
-// dB below which is considered silence (-35 works well for indoor speech)
-const SILENCE_THRESHOLD_DB = -35;
-// How long silence must last before we consider the utterance complete
-const SILENCE_DURATION_MS = 1200;
-// Ignore the first 600ms of every recording to avoid triggering on mic startup noise
-const MIN_RECORDING_MS = 600;
+const SPEECH_THRESHOLD_DB = -35;  // above this = someone is speaking
+const SILENCE_DURATION_MS  = 1200; // silence must last this long after speech ends
+const MIN_RECORDING_MS     = 400;  // ignore the first 400ms (mic startup noise)
 
 export function useAudioRecorder() {
-  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recordingRef    = useRef<Audio.Recording | null>(null);
   const [state, setState] = useState<RecorderState>('idle');
 
-  // Silence detection state — all in refs so the status callback always reads fresh values
-  const silenceStartRef = useRef<number | null>(null);
-  const recordingStartTimeRef = useRef<number>(0);
-  const onSilenceRef = useRef<(() => void) | null>(null);
-  const silenceFiredRef = useRef(false); // prevent double-firing within one recording
+  const onSilenceRef        = useRef<(() => void) | null>(null);
+  const silenceFiredRef     = useRef(false);  // prevent double-fire
+  const speechDetectedRef   = useRef(false);  // true once audio > threshold seen
+  const silenceStartRef     = useRef<number | null>(null);
+  const recordingStartRef   = useRef<number>(0);
 
   async function startRecording(onSilenceDetected?: () => void) {
     try {
       const { status, canAskAgain } = await Audio.requestPermissionsAsync();
-
       if (status !== 'granted') {
         if (!canAskAgain) {
           Alert.alert(
             'Microphone Permission Required',
-            'Please enable microphone access for Talkative in your phone Settings → Apps → Talkative → Permissions → Microphone.',
+            'Enable microphone access in Settings → Apps → Talkative → Permissions.',
             [
               { text: 'Cancel', style: 'cancel' },
               { text: 'Open Settings', onPress: () => Linking.openSettings() },
@@ -42,7 +38,6 @@ export function useAudioRecorder() {
         return;
       }
 
-      // Clean up any previous recording
       if (recordingRef.current) {
         try { await recordingRef.current.stopAndUnloadAsync(); } catch (_) {}
         recordingRef.current = null;
@@ -56,11 +51,12 @@ export function useAudioRecorder() {
         playThroughEarpieceAndroid: false,
       });
 
-      // Reset silence detection for this recording session
-      onSilenceRef.current = onSilenceDetected ?? null;
-      silenceStartRef.current = null;
-      silenceFiredRef.current = false;
-      recordingStartTimeRef.current = Date.now();
+      // Reset all detection state for this session
+      onSilenceRef.current      = onSilenceDetected ?? null;
+      silenceFiredRef.current   = false;
+      speechDetectedRef.current = false;
+      silenceStartRef.current   = null;
+      recordingStartRef.current = Date.now();
 
       const { recording } = await Audio.Recording.createAsync(
         {
@@ -91,26 +87,30 @@ export function useAudioRecorder() {
         (status) => {
           if (!status.isRecording || silenceFiredRef.current) return;
 
-          const elapsed = Date.now() - recordingStartTimeRef.current;
+          const elapsed = Date.now() - recordingStartRef.current;
           if (elapsed < MIN_RECORDING_MS) return;
 
           const db = status.metering ?? -160;
 
-          if (db < SILENCE_THRESHOLD_DB) {
-            // Sound level is below threshold — start or continue silence timer
+          if (db >= SPEECH_THRESHOLD_DB) {
+            // ── Speech detected ──────────────────────────────────────────────
+            speechDetectedRef.current = true;
+            silenceStartRef.current   = null; // reset silence timer while talking
+          } else if (speechDetectedRef.current) {
+            // ── Silence after speech ─────────────────────────────────────────
+            // Only start the silence timer once we've confirmed real speech.
+            // This prevents firing on ambient noise or an empty room.
             if (silenceStartRef.current === null) {
               silenceStartRef.current = Date.now();
             } else if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
-              // Silence held long enough — utterance is complete
-              silenceFiredRef.current = true; // lock so it only fires once
+              silenceFiredRef.current = true;
               onSilenceRef.current?.();
             }
-          } else {
-            // Sound detected — reset silence timer
-            silenceStartRef.current = null;
           }
+          // If db < threshold AND speechDetectedRef is false → pure silence,
+          // no speech yet → do nothing, keep recording and waiting.
         },
-        100 // Check metering every 100ms
+        100 // poll every 100ms
       );
 
       recordingRef.current = recording;
@@ -126,8 +126,7 @@ export function useAudioRecorder() {
     const recording = recordingRef.current;
     if (!recording) return null;
 
-    // Disable the silence callback before stopping to prevent it firing during teardown
-    onSilenceRef.current = null;
+    onSilenceRef.current    = null;
     silenceFiredRef.current = true;
 
     setState('processing');
@@ -142,12 +141,11 @@ export function useAudioRecorder() {
     }
   }
 
-  // Stops and discards the current recording without returning the audio file.
-  // Use when the user is about to speak and we don't want the mic picking it up.
+  // Discards current recording without processing — used when user is about to speak.
   async function cancelRecording(): Promise<void> {
     const recording = recordingRef.current;
     if (!recording) return;
-    onSilenceRef.current = null;
+    onSilenceRef.current    = null;
     silenceFiredRef.current = true;
     try { await recording.stopAndUnloadAsync(); } catch (_) {}
     try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch (_) {}

@@ -225,17 +225,31 @@ export default function ConversationScreen({ navigation }: Props) {
 
       setLoading(true);
 
-      // Immediately restart listening so we don't miss what the other person says next
+      // Restart listening immediately so we don't miss the next utterance
       if (micActiveRef.current) {
         await startRecording(handleSilenceDetected);
       }
 
-      const { text } = await transcribe(uri, groqApiKey);
+      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
       if (!text) {
         setLoading(false);
         return;
       }
 
+      // Use Whisper's detected language to figure out who spoke.
+      // Their language → other person → translate to user's language + suggestions.
+      // User's language → user is speaking (e.g. reading a suggestion aloud) → ignore.
+      const theirLangCode = theirLang.value.toLowerCase().split('-')[0];
+      const myLangCode    = myLang.value.toLowerCase().split('-')[0];
+      const detected      = detectedLanguage.toLowerCase().split('-')[0];
+
+      if (detected === myLangCode) {
+        // User spoke in their own language — not relevant, keep listening
+        setLoading(false);
+        return;
+      }
+
+      // Either their language or unknown → treat as the other person speaking
       setLastDetectedSpeaker('them');
       await handleTranslateText(text, 'them');
     } catch (e: any) {
