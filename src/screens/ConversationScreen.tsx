@@ -121,14 +121,13 @@ export default function ConversationScreen({ navigation }: Props) {
 
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
 
-      // AUDIO LOGIC FOR THE DIRECTOR (YOU)
       if (ttsEnabled) {
         if (speaker === 'them') {
-          // They spoke: Speak the ENGLISH translation into your earpiece
+          // Other person spoke — speak translation in user's language so they understand
           await speak(msg.translated, myLang.value);
         } else {
-          // You selected a suggestion: Speak the HINDI/TELUGU translation into your earpiece
-          // so you know how to say it out loud to them.
+          // User tapped a suggestion — speak the translation in other person's language
+          // so user knows exactly how to say it aloud
           await speak(msg.translated, theirLang.value);
         }
       }
@@ -200,17 +199,15 @@ export default function ConversationScreen({ navigation }: Props) {
       // while we transcribe the previous one
       if (autoRestart && isVADActiveRef.current) await startRecording();
 
-      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
+      const { text } = await transcribe(uri, groqApiKey);
       if (!text) {
         setLoading(false);
         return;
       }
 
-      const isMyLang = detectedLanguage.toLowerCase().startsWith(myLang.value.toLowerCase().split('-')[0]);
-      const speaker: ActiveSpeaker = isMyLang ? 'me' : 'them';
-      setLastDetectedSpeaker(speaker);
-
-      await handleTranslateText(text, speaker);
+      // Mic always captures the other person — translate to user's language
+      setLastDetectedSpeaker('them');
+      await handleTranslateText(text, 'them');
     } catch (e: any) {
       console.error('Hands-free error:', e);
       setError(e?.message ?? 'Transcription failed.');
@@ -258,7 +255,7 @@ export default function ConversationScreen({ navigation }: Props) {
         </Text>
 
         <Text style={styles.scriptHint}>
-          {isMe ? `READ THIS OUT LOUD` : `THEY SAID THIS`}
+          {isMe ? `SAY THIS IN ${theirLang.name.toUpperCase()}` : `THEY SAID THIS`}
         </Text>
       </View>
     );
@@ -369,13 +366,11 @@ export default function ConversationScreen({ navigation }: Props) {
                   <View style={styles.listeningRow}>
                     <View style={styles.listeningDot} />
                     <Text style={styles.micHintText}>
-                      {lastDetectedSpeaker
-                        ? `Last: ${lastDetectedSpeaker === 'me' ? myLang.name : theirLang.name} detected`
-                        : 'Listening...'}
+                      Listening for {theirLang.name}...
                     </Text>
                   </View>
                 ) : (
-                  <Text style={styles.micHintText}>Tap mic — hands-free mode</Text>
+                  <Text style={styles.micHintText}>Tap mic to start listening</Text>
                 )}
               </View>
               <Pressable
