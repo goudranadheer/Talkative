@@ -82,8 +82,13 @@ export async function generateSuggestions({
 }): Promise<string[]> {
   const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
 
+  // Use translated text throughout so the model always works in the user's language.
+  // m.original for 'them' is in their language (e.g. Hindi) — use m.translated (English).
+  // m.original for 'me' is already the English suggestion the user tapped.
   const historyBlock = history.slice(-10).map(m =>
-    `${m.speaker === 'me' ? `User (${myLanguage})` : `Other person (${theirLanguage})`}: ${m.original}`
+    m.speaker === 'me'
+      ? `User (${myLanguage}): ${m.original}`
+      : `Other person (${theirLanguage}): ${m.translated}`
   ).join('\n');
 
   const lastTheirMessage = history.filter(m => m.speaker === 'them').slice(-1)[0];
@@ -92,7 +97,7 @@ export async function generateSuggestions({
 
 User's goal: ${conversationContext || 'Have a productive conversation'}
 
-The other person (${theirLanguage} speaker) just spoke. You must decide the 3 best things the user (${myLanguage} speaker) should say right now to move closer to their goal.
+The other person just spoke. Decide the 3 best things the user should say right now in ${myLanguage} to move closer to their goal.
 
 How to think:
 - What does the user ultimately want from this conversation?
@@ -102,6 +107,7 @@ How to think:
 - If an offer or statement was made, respond strategically, not just politely.
 
 Output rules:
+- Write ONLY in ${myLanguage}.
 - Three responses separated by " | " — nothing else. No labels, no numbering, no extra text.
 - Each response must be under 15 words and sound natural when spoken aloud.
 - Order them: most assertive/direct first, softer alternative second, clarifying question third.
@@ -109,8 +115,8 @@ Output rules:
 
   const userPrompt = [
     historyBlock ? `Conversation so far:\n${historyBlock}` : '',
-    lastTheirMessage ? `\nThey just said: "${lastTheirMessage.original}"` : '',
-    `\nWhat should the user say to advance their goal?`,
+    lastTheirMessage ? `\nThey just said: "${lastTheirMessage.translated}"` : '',
+    `\nWhat should the user say in ${myLanguage} to advance their goal?`,
   ].join('');
 
   const response = await client.chat.completions.create({
