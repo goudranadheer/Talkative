@@ -38,7 +38,8 @@ export default function ConversationScreen({ navigation }: Props) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [lastDetectedSpeaker, setLastDetectedSpeaker] = useState<ActiveSpeaker | null>(null);
   const listRef = useRef<FlatList>(null);
-  const { state: recorderState, startRecording, stopRecording } = useAudioRecorder();
+  const { state: recorderState, startRecording, stopRecording, cancelRecording } = useAudioRecorder();
+  const [micPaused, setMicPaused] = useState(false); // true while user is speaking their response
 
   const myLang = briefing.myLanguage!;
   const theirLang = briefing.theirLanguage!;
@@ -156,7 +157,26 @@ export default function ConversationScreen({ navigation }: Props) {
   async function handleSuggestionPress(suggestion: string) {
     if (isProcessing) return;
     setInputText('');
+
+    // Stop mic immediately — don't let it pick up the user reading the suggestion aloud
+    const wasMicOn = isRecording;
+    if (wasMicOn) {
+      await cancelRecording();
+      setMicPaused(true);
+    }
+
+    // Translate suggestion and speak it in the other person's language
     await handleTranslateText(suggestion, 'me');
+
+    // Resume listening after TTS finishes + 1s buffer for the user to finish speaking
+    if (wasMicOn) {
+      setTimeout(async () => {
+        setMicPaused(false);
+        try {
+          await startRecording(handleSilenceDetected);
+        } catch (e) {}
+      }, 1000);
+    }
   }
 
   async function handleSendText() {
@@ -166,54 +186,49 @@ export default function ConversationScreen({ navigation }: Props) {
     await handleTranslateText(text, activeSpeaker);
   }
 
-  const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isVADActiveRef = useRef(false);
+  const micActiveRef = useRef(false); // tracks if hands-free session is on
+
+  // Called by the silence detector in useAudioRecorder when the other person stops talking
+  async function handleSilenceDetected() {
+    if (!micActiveRef.current) return;
+    await processRecording();
+  }
 
   async function handleMicToggle() {
     if (isProcessing) return;
 
-    if (isRecording) {
-      // STOP RECORDING
-      isVADActiveRef.current = false;
-      if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
+    if (isRecording || micPaused) {
+      // End the hands-free session
+      micActiveRef.current = false;
+      setMicPaused(false);
       if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
-      await processRecording();
+      if (isRecording) await processRecording();
     } else {
-      // START RECORDING
+      // Start the hands-free session
+      micActiveRef.current = true;
       stopSpeech();
       setSpeakingId(null);
       setError('');
       try {
-        await startRecording();
-        isVADActiveRef.current = true;
-        startHandsFreeLoop();
+        await startRecording(handleSilenceDetected);
       } catch (e: any) {
-        setError(e?.message ?? JSON.stringify(e) ?? 'Failed to start microphone.');
+        micActiveRef.current = false;
+        setError(e?.message ?? 'Failed to start microphone.');
       }
     }
   }
 
-  function startHandsFreeLoop() {
-    if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
-    vadIntervalRef.current = setInterval(async () => {
-      if (isVADActiveRef.current) {
-        await processRecording(true);
-      }
-    }, 5000); // 5 second chunks — responsive enough for natural speech
-  }
-
-  async function processRecording(autoRestart = false) {
+  async function processRecording() {
     try {
       const uri = await stopRecording();
-      if (!uri) {
-        if (autoRestart && isVADActiveRef.current) await startRecording();
-        return;
-      }
+      if (!uri) return;
 
       setLoading(true);
-      // Restart immediately to minimise gaps — new chunk captures next utterance
-      // while we transcribe the previous one
-      if (autoRestart && isVADActiveRef.current) await startRecording();
+
+      // Immediately restart listening so we don't miss what the other person says next
+      if (micActiveRef.current) {
+        await startRecording(handleSilenceDetected);
+      }
 
       const { text } = await transcribe(uri, groqApiKey);
       if (!text) {
@@ -221,15 +236,12 @@ export default function ConversationScreen({ navigation }: Props) {
         return;
       }
 
-      // Mic always captures the other person — translate to user's language
       setLastDetectedSpeaker('them');
       await handleTranslateText(text, 'them');
     } catch (e: any) {
       console.error('Hands-free error:', e);
       setError(e?.message ?? 'Transcription failed.');
-      // Stop the loop on error so it doesn't keep retrying endlessly
-      isVADActiveRef.current = false;
-      if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
+      micActiveRef.current = false;
     } finally {
       setLoading(false);
     }
@@ -378,6 +390,10 @@ export default function ConversationScreen({ navigation }: Props) {
               <View style={styles.micHint}>
                 {isProcessing ? (
                   <ActivityIndicator color="#6c63ff" />
+                ) : micPaused ? (
+                  <Text style={styles.micHintPaused}>
+                    Say it aloud — resuming in a moment...
+                  </Text>
                 ) : isRecording ? (
                   <View style={styles.listeningRow}>
                     <View style={styles.listeningDot} />
@@ -390,11 +406,11 @@ export default function ConversationScreen({ navigation }: Props) {
                 )}
               </View>
               <Pressable
-                style={[styles.micBtn, isRecording && styles.micBtnActive]}
+                style={[styles.micBtn, (isRecording || micPaused) && styles.micBtnActive]}
                 onPress={handleMicToggle}
                 disabled={isProcessing}
               >
-                <Text style={styles.micBtnIcon}>{isRecording ? '⏹' : '🎙'}</Text>
+                <Text style={styles.micBtnIcon}>{(isRecording || micPaused) ? '⏹' : '🎙'}</Text>
               </Pressable>
             </>
           ) : (
@@ -523,6 +539,7 @@ const styles = StyleSheet.create({
   sendBtnText: { color: '#fff', fontSize: 22, fontWeight: '700' },
   micHint: { flex: 1, alignItems: 'center' },
   micHintText: { color: '#555', fontSize: 14 },
+  micHintPaused: { color: '#6c63ff', fontSize: 13, fontStyle: 'italic' },
   micBtn: {
     width: 64,
     height: 64,
