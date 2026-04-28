@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
+import { callDeepSeek } from '../services/reasoning';
 import Groq from 'groq-sdk';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -26,12 +27,11 @@ type ChatMessage = {
 };
 
 export default function DetailedBriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, groqApiKey } = useApp();
+  const { briefing, setBriefing, groqApiKey, deepseekApiKey } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const flatListRef = useRef<FlatList>(null);
-  const client = useMemo(() => new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true }), [groqApiKey]);
 
   const systemPrompt = `You are a sharp, experienced conversation coach preparing a ${briefing.myLanguage?.name} speaker for a live conversation with a ${briefing.theirLanguage?.name} speaker.
 
@@ -51,16 +51,19 @@ Rules:
     const startInterview = async () => {
       setLoading(true);
       try {
-        const response = await client.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: 'Start the interview.' },
-          ],
-          max_tokens: 300,
-        });
-        const content = response.choices[0]?.message?.content || "Tell me — who are you meeting and what do you need to achieve from this conversation?";
-        setMessages([{ role: 'assistant', content }]);
+        const chatMessages = [
+          { role: 'system' as const, content: systemPrompt },
+          { role: 'user' as const, content: 'Start the interview.' },
+        ];
+        let content: string;
+        if (deepseekApiKey) {
+          content = await callDeepSeek(chatMessages, { max_tokens: 300 }, deepseekApiKey);
+        } else {
+          const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
+          const response = await client.chat.completions.create({ model: 'llama-3.3-70b-versatile', messages: chatMessages, max_tokens: 300 });
+          content = response.choices[0]?.message?.content ?? '';
+        }
+        setMessages([{ role: 'assistant', content: content || "Tell me — who are you meeting and what do you need to achieve from this conversation?" }]);
       } catch (e) {
         setMessages([{ role: 'assistant', content: "Tell me — who are you meeting and what do you need to achieve from this conversation?" }]);
       } finally {
@@ -80,15 +83,18 @@ Rules:
     setLoading(true);
 
     try {
-      const response = await client.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...newMessages,
-        ],
-        max_tokens: 400,
-      });
-      const aiContent = response.choices[0]?.message?.content || "";
+      const chatMessages = [
+        { role: 'system' as const, content: systemPrompt },
+        ...newMessages,
+      ];
+      let aiContent: string;
+      if (deepseekApiKey) {
+        aiContent = await callDeepSeek(chatMessages, { max_tokens: 400, temperature: 0.7 }, deepseekApiKey);
+      } else {
+        const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
+        const response = await client.chat.completions.create({ model: 'llama-3.3-70b-versatile', messages: chatMessages, max_tokens: 400 });
+        aiContent = response.choices[0]?.message?.content ?? '';
+      }
       setMessages([...newMessages, { role: 'assistant', content: aiContent }]);
     } catch (e) {
       console.error(e);

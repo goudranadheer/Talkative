@@ -10,6 +10,8 @@ export type BriefingConfig = {
   myLanguage: Language | null;
   theirLanguage: Language | null;
   context: string;
+  detailedContext?: string;
+  mode: 'brief' | 'detailed';
 };
 
 export type Message = {
@@ -30,6 +32,8 @@ type AppContextType = {
   clearMessages: () => void;
   groqApiKey: string;
   setGroqApiKey: (key: string) => void;
+  deepseekApiKey: string;
+  setDeepseekApiKey: (key: string) => void;
   translationMode: TranslationMode;
   setTranslationMode: (mode: TranslationMode) => void;
   ttsEnabled: boolean;
@@ -43,9 +47,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     myLanguage: null,
     theirLanguage: null,
     context: '',
+    mode: 'brief',
   });
   const [messages, setMessages] = useState<Message[]>([]);
   const [groqApiKey, setGroqApiKey] = useState('');
+  const [deepseekApiKey, setDeepseekApiKey] = useState('');
   const [translationMode, setTranslationMode] = useState<TranslationMode>('free');
   const [ttsEnabled, setTtsEnabled] = useState(true);
 
@@ -57,6 +63,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       briefing, setBriefing,
       messages, addMessage, clearMessages,
       groqApiKey, setGroqApiKey,
+      deepseekApiKey, setDeepseekApiKey,
       translationMode, setTranslationMode,
       ttsEnabled, setTtsEnabled,
     }}>

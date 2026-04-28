@@ -20,24 +20,27 @@ type Props = {
 };
 
 export default function BriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, groqApiKey, setGroqApiKey, translationMode, setTranslationMode } = useApp();
+  const { briefing, setBriefing, groqApiKey, setGroqApiKey, deepseekApiKey, setDeepseekApiKey, translationMode, setTranslationMode } = useApp();
   const [myLanguage, setMyLanguage] = useState<Language | null>(briefing.myLanguage);
   const [theirLanguage, setTheirLanguage] = useState<Language | null>(briefing.theirLanguage);
   const [context, setContext] = useState(briefing.context);
   const [mode, setMode] = useState<'brief' | 'detailed'>(briefing.mode);
   const [localGroqKey, setLocalGroqKey] = useState(groqApiKey);
+  const [localDeepseekKey, setLocalDeepseekKey] = useState(deepseekApiKey);
   const [pickerTarget, setPickerTarget] = useState<'mine' | 'theirs' | null>(null);
 
+  const hasLLMKey = localGroqKey.trim().length > 0 || localDeepseekKey.trim().length > 0;
   const canStart =
     myLanguage &&
     theirLanguage &&
     myLanguage.value !== theirLanguage.value &&
-    (translationMode === 'free' || localGroqKey.trim().length > 0) &&
+    (translationMode === 'free' || hasLLMKey) &&
     (mode === 'detailed' || context.trim().length > 0);
 
   function handleStart() {
     setBriefing({ myLanguage, theirLanguage, context, mode });
     setGroqApiKey(localGroqKey.trim());
+    setDeepseekApiKey(localDeepseekKey.trim());
     if (mode === 'detailed') {
       navigation.navigate('DetailedBriefing' as any);
     } else {
@@ -138,18 +141,18 @@ export default function BriefingScreen({ navigation }: Props) {
             onPress={() => setTranslationMode('reasoning')}
           >
             <Text style={[styles.modeBtnText, translationMode === 'reasoning' && styles.modeBtnTextActive]}>
-              Reasoning
+              AI
             </Text>
             <Text style={[styles.modeBtnSub, translationMode === 'reasoning' && styles.modeBtnSubActive]}>
-              Groq DeepSeek R1 · Free key
+              {localDeepseekKey ? 'DeepSeek V4' : 'Groq Llama'} · Context-aware
             </Text>
           </TouchableOpacity>
         </View>
 
-        {/* Groq key — always shown, unlocks mic + reasoning */}
+        {/* Groq key — unlocks mic (Whisper STT) */}
         <Text style={styles.label}>
           Groq API Key{' '}
-          <Text style={styles.optional}>(free at console.groq.com — unlocks mic & reasoning)</Text>
+          <Text style={styles.optional}>(free at console.groq.com — unlocks mic)</Text>
         </Text>
         <TextInput
           style={styles.input}
@@ -159,6 +162,21 @@ export default function BriefingScreen({ navigation }: Props) {
           autoCapitalize="none"
           value={localGroqKey}
           onChangeText={setLocalGroqKey}
+        />
+
+        {/* DeepSeek key — upgrades LLM from Groq Llama to DeepSeek V4 */}
+        <Text style={styles.label}>
+          DeepSeek API Key{' '}
+          <Text style={styles.optional}>(platform.deepseek.com — better AI suggestions)</Text>
+        </Text>
+        <TextInput
+          style={styles.input}
+          placeholder="sk-... (optional — falls back to Groq LLM)"
+          placeholderTextColor="#999"
+          secureTextEntry
+          autoCapitalize="none"
+          value={localDeepseekKey}
+          onChangeText={setLocalDeepseekKey}
         />
 
         <TouchableOpacity

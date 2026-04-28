@@ -1,6 +1,55 @@
 import Groq from 'groq-sdk';
 import { Message } from '../context/AppContext';
 
+const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
+// Verify model IDs at platform.deepseek.com — update to 'deepseek-v4-flash' once confirmed available
+const DEEPSEEK_FAST_MODEL = 'deepseek-chat';
+
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+export async function callDeepSeek(
+  messages: ChatMessage[],
+  options: { model?: string; max_tokens?: number; temperature?: number },
+  apiKey: string,
+): Promise<string> {
+  const res = await fetch(DEEPSEEK_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: options.model ?? DEEPSEEK_FAST_MODEL,
+      messages,
+      max_tokens: options.max_tokens ?? 512,
+      temperature: options.temperature ?? 0,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`DeepSeek API failed: ${err}`);
+  }
+
+  const data = await res.json();
+  return data.choices[0]?.message?.content ?? '';
+}
+
+async function callGroqLlm(
+  messages: ChatMessage[],
+  options: { model: string; max_tokens?: number; temperature?: number },
+  apiKey: string,
+): Promise<string> {
+  const client = new Groq({ apiKey, dangerouslyAllowBrowser: true });
+  const response = await client.chat.completions.create({
+    model: options.model,
+    messages,
+    max_tokens: options.max_tokens,
+    temperature: options.temperature ?? 0,
+  });
+  return response.choices[0]?.message?.content ?? '';
+}
+
 type ReasonParams = {
   text: string;
   fromLanguage: string;
@@ -10,9 +59,9 @@ type ReasonParams = {
   conversationContext: string;
   history: Message[];
   groqApiKey: string;
+  deepseekApiKey?: string;
 };
 
-// Groq free tier — context-aware translation using Llama
 export async function translateWithReasoning({
   text,
   fromLanguage,
@@ -22,9 +71,8 @@ export async function translateWithReasoning({
   conversationContext,
   history,
   groqApiKey,
+  deepseekApiKey,
 }: ReasonParams): Promise<string> {
-  const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
-
   const historyBlock = history.slice(-6).map(m =>
     `${m.speaker === 'me' ? myLanguage : theirLanguage}: "${m.original}" → "${m.translated}"`
   ).join('\n');
@@ -44,19 +92,19 @@ export async function translateWithReasoning({
     `Translate to ${toLanguage}: ${text}`,
   ].join('');
 
-  const response = await client.chat.completions.create({
-    model: 'llama-3.1-8b-instant',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMessage },
-    ],
-    max_tokens: 256,
-    temperature: 0,
-  });
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userMessage },
+  ];
 
-  let result = response.choices[0]?.message?.content ?? '';
+  let result: string;
 
-  // Strip any model preamble the LLM occasionally adds despite instructions
+  if (deepseekApiKey) {
+    result = await callDeepSeek(messages, { max_tokens: 256, temperature: 0 }, deepseekApiKey);
+  } else {
+    result = await callGroqLlm(messages, { model: 'llama-3.1-8b-instant', max_tokens: 256, temperature: 0 }, groqApiKey);
+  }
+
   result = result
     .replace(/<think>[\s\S]*?<\/think>/g, '')
     .replace(/^(translation|translated text|here is the translation)[:\s]+/i, '')
@@ -65,26 +113,21 @@ export async function translateWithReasoning({
   return result;
 }
 
-// Called only when the other person just spoke.
-// Acts as an agent for the user — generates responses that advance their goal.
 export async function generateSuggestions({
   history,
   conversationContext,
   myLanguage,
   theirLanguage,
   groqApiKey,
+  deepseekApiKey,
 }: {
   history: Message[];
   conversationContext: string;
   myLanguage: string;
   theirLanguage: string;
   groqApiKey: string;
+  deepseekApiKey?: string;
 }): Promise<string[]> {
-  const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
-
-  // Use translated text throughout so the model always works in the user's language.
-  // m.original for 'them' is in their language (e.g. Hindi) — use m.translated (English).
-  // m.original for 'me' is already the English suggestion the user tapped.
   const historyBlock = history.slice(-10).map(m =>
     m.speaker === 'me'
       ? `User (${myLanguage}): ${m.original}`
@@ -119,17 +162,19 @@ Output rules:
     `\nWhat should the user say in ${myLanguage} to advance their goal?`,
   ].join('');
 
-  const response = await client.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature: 0.5,
-    max_tokens: 150,
-  });
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
 
-  const content = response.choices[0]?.message?.content ?? '';
+  let content: string;
+
+  if (deepseekApiKey) {
+    content = await callDeepSeek(messages, { max_tokens: 150, temperature: 0.5 }, deepseekApiKey);
+  } else {
+    content = await callGroqLlm(messages, { model: 'llama-3.3-70b-versatile', max_tokens: 150, temperature: 0.5 }, groqApiKey);
+  }
+
   return content
     .split('|')
     .map(s => s.trim()
@@ -139,4 +184,3 @@ Output rules:
     .filter(s => s.length > 0)
     .slice(0, 3);
 }
-

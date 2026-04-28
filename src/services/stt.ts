@@ -7,20 +7,26 @@ type STTResult = {
 };
 
 export async function transcribe(audioUri: string, groqApiKey: string): Promise<STTResult> {
-  // Fetch the recorded audio file as a blob
-  const fileResponse = await fetch(audioUri);
-  const blob = await fileResponse.blob();
-
+  // Use a more robust way to handle the local file for FormData in React Native
   const formData = new FormData();
-  formData.append('file', blob as any, 'recording.m4a');
+
+  // React Native's Fetch has issues with some blob/file formats.
+  // Using the URI directly in FormData is the standard way.
+  formData.append('file', {
+    uri: audioUri,
+    type: 'audio/m4a',
+    name: 'recording.m4a',
+  } as any);
+
   formData.append('model', 'whisper-large-v3-turbo');
-  formData.append('response_format', 'verbose_json'); // includes detected language
+  formData.append('response_format', 'verbose_json');
   formData.append('temperature', '0');
 
   const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${groqApiKey}`,
+      'Accept': 'application/json',
     },
     body: formData,
   });

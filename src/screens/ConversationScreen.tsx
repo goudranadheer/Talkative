@@ -18,6 +18,7 @@ import { translate } from '../services/translator';
 import { translateWithReasoning, generateSuggestions } from '../services/reasoning';
 import { transcribe } from '../services/stt';
 import { speak, stopSpeech } from '../services/tts';
+import { enrollSpeaker, detectSpeaker, EnrolledSpeaker } from '../services/speaker';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -29,7 +30,7 @@ type Props = {
 type ActiveSpeaker = 'me' | 'them';
 
 export default function ConversationScreen({ navigation }: Props) {
-  const { briefing, messages, addMessage, clearMessages, groqApiKey, translationMode, ttsEnabled, setTtsEnabled } = useApp();
+  const { briefing, messages, addMessage, clearMessages, groqApiKey, deepseekApiKey, translationMode, ttsEnabled, setTtsEnabled } = useApp();
   const [inputText, setInputText] = useState('');
   const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>('them');
   const [loading, setLoading] = useState(false);
@@ -37,6 +38,19 @@ export default function ConversationScreen({ navigation }: Props) {
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [lastDetectedSpeaker, setLastDetectedSpeaker] = useState<ActiveSpeaker | null>(null);
+
+  // Voice enrollment
+  const [enrollmentStep, setEnrollmentStep] = useState<'them' | 'me' | null>(null);
+  const [hasEnrolled, setHasEnrolled] = useState(false);
+  const [enrollmentRecording, setEnrollmentRecording] = useState(false);
+  const [enrollmentLoading, setEnrollmentLoading] = useState(false);
+  const [enrolledSpeakers, setEnrolledSpeakers] = useState<{
+    me: EnrolledSpeaker | null;
+    them: EnrolledSpeaker | null;
+  }>({ me: null, them: null });
+
+  const lastTTSEndTimeRef = useRef<number | null>(null);
+
   const listRef = useRef<FlatList>(null);
   const { state: recorderState, startRecording, stopRecording } = useAudioRecorder();
 
@@ -83,6 +97,7 @@ export default function ConversationScreen({ navigation }: Props) {
           myLanguage: myLang.name,
           theirLanguage: theirLang.name,
           groqApiKey,
+          deepseekApiKey: deepseekApiKey || undefined,
         });
         setSuggestions(sugs);
       } catch (e) {
@@ -101,6 +116,7 @@ export default function ConversationScreen({ navigation }: Props) {
     setSpeakingId(msg.id);
     try {
       await speak(msg.translated, targetLang.value);
+      lastTTSEndTimeRef.current = Date.now();
     } finally {
       setSpeakingId(null);
     }
@@ -126,6 +142,7 @@ export default function ConversationScreen({ navigation }: Props) {
           conversationContext: briefing.context,
           history: messages,
           groqApiKey,
+          deepseekApiKey: deepseekApiKey || undefined,
         });
       } else {
         translated = await translate({
@@ -147,7 +164,6 @@ export default function ConversationScreen({ navigation }: Props) {
       const newMessages = [...messages, msg];
 
       if (speaker === 'them') {
-        // Other person spoke — schedule suggestions after a pause
         scheduleSuggestions(newMessages);
       } else {
         // User tapped a suggestion — store its translation so the mic can
@@ -166,13 +182,11 @@ export default function ConversationScreen({ navigation }: Props) {
 
       if (ttsEnabled) {
         if (speaker === 'them') {
-          // Other person spoke — speak translation in user's language so they understand
           await speak(msg.translated, myLang.value);
         } else {
-          // User tapped a suggestion — speak the translation in other person's language
-          // so user knows exactly how to say it aloud
           await speak(msg.translated, theirLang.value);
         }
+        lastTTSEndTimeRef.current = Date.now();
       }
     } catch (e: any) {
       setError(e?.message ?? 'Translation failed.');
@@ -204,27 +218,68 @@ export default function ConversationScreen({ navigation }: Props) {
     await processRecording();
   }
 
+  async function startListening() {
+    micActiveRef.current = true;
+    stopSpeech();
+    setSpeakingId(null);
+    setError('');
+    try {
+      await startRecording(handleSilenceDetected);
+    } catch (e: any) {
+      micActiveRef.current = false;
+      setError(e?.message ?? 'Failed to start microphone.');
+    }
+  }
+
   async function handleMicToggle() {
     if (isProcessing) return;
 
     if (isRecording) {
-      // End the hands-free session
       micActiveRef.current = false;
       if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
       await processRecording();
+    } else if (!hasEnrolled) {
+      // First time — offer voice enrollment before starting
+      setEnrollmentStep('them');
     } else {
-      // Start the hands-free session
-      micActiveRef.current = true;
-      stopSpeech();
-      setSpeakingId(null);
-      setError('');
+      await startListening();
+    }
+  }
+
+  async function handleEnrollmentRecord() {
+    setEnrollmentRecording(true);
+    await startRecording(); // no silence callback — manual stop
+  }
+
+  async function handleEnrollmentStop() {
+    const uri = await stopRecording();
+    setEnrollmentRecording(false);
+
+    if (uri && groqApiKey && enrollmentStep) {
+      setEnrollmentLoading(true);
       try {
-        await startRecording(handleSilenceDetected);
-      } catch (e: any) {
-        micActiveRef.current = false;
-        setError(e?.message ?? 'Failed to start microphone.');
+        const enrolled = await enrollSpeaker(uri, groqApiKey, enrollmentStep);
+        setEnrolledSpeakers(prev => ({ ...prev, [enrollmentStep]: enrolled }));
+      } catch (_) {
+        // Enrollment failed — continue without that speaker registered
+      } finally {
+        setEnrollmentLoading(false);
       }
     }
+
+    if (enrollmentStep === 'them') {
+      setEnrollmentStep('me');
+    } else {
+      setEnrollmentStep(null);
+      setHasEnrolled(true);
+      await startListening();
+    }
+  }
+
+  async function handleEnrollmentSkip() {
+    setEnrollmentStep(null);
+    setHasEnrolled(true);
+    await startListening();
   }
 
   async function processRecording() {
@@ -245,27 +300,23 @@ export default function ConversationScreen({ navigation }: Props) {
         return;
       }
 
-      // Use Whisper's detected language to figure out who spoke.
-      // Their language → other person → translate to user's language + suggestions.
-      // User's language → user is speaking (e.g. reading a suggestion aloud) → ignore.
+      // Similarity check first — catch user reading suggestion aloud regardless of language
+      if (isSimilarToSuggestion(text)) {
+        lastSuggestionRef.current = null;
+        setLoading(false);
+        return;
+      }
+
+      // Multi-signal speaker detection: enrollment match → TTS timing → language fallback
       const myLangCode = myLang.value.toLowerCase().split('-')[0];
       const detected   = detectedLanguage.toLowerCase().split('-')[0];
+      const speaker    = detectSpeaker(detected, enrolledSpeakers, myLangCode, lastTTSEndTimeRef.current);
 
-      if (detected === myLangCode) {
-        // User spoke in their own language — not relevant, keep listening
+      if (speaker === 'me') {
         setLoading(false);
         return;
       }
 
-      // Check if this transcription is the user reading back the last suggestion aloud.
-      // If it closely matches the stored suggestion translation, discard it silently.
-      if (isSimilarToSuggestion(text)) {
-        lastSuggestionRef.current = null; // consumed — clear so next utterance is fresh
-        setLoading(false);
-        return;
-      }
-
-      // Either their language or unknown → treat as the other person speaking
       setLastDetectedSpeaker('them');
       await handleTranslateText(text, 'them');
     } catch (e: any) {
@@ -464,6 +515,52 @@ export default function ConversationScreen({ navigation }: Props) {
             </>
           )}
         </View>
+        {/* Voice enrollment overlay */}
+        {enrollmentStep !== null && (
+          <View style={styles.enrollmentOverlay}>
+            <Text style={styles.enrollmentTitle}>Voice Setup</Text>
+            <Text style={styles.enrollmentSubtitle}>
+              {enrollmentStep === 'them'
+                ? `Ask the ${theirLang.name} speaker to say a few words`
+                : `Now say a few words yourself in ${myLang.name}`}
+            </Text>
+            <Text style={styles.enrollmentHint}>
+              This helps the app tell your voices apart — even when both speak the same language.
+            </Text>
+
+            {enrollmentLoading ? (
+              <ActivityIndicator color="#6c63ff" style={{ marginVertical: 24 }} />
+            ) : enrollmentRecording ? (
+              <View style={styles.enrollmentRecordingRow}>
+                <View style={styles.listeningDot} />
+                <Text style={styles.enrollmentRecordingText}>Listening…</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.enrollmentActions}>
+              {!enrollmentRecording && !enrollmentLoading ? (
+                <TouchableOpacity style={styles.enrollmentPrimaryBtn} onPress={handleEnrollmentRecord}>
+                  <Text style={styles.enrollmentPrimaryText}>Start Recording</Text>
+                </TouchableOpacity>
+              ) : enrollmentRecording ? (
+                <TouchableOpacity style={styles.enrollmentStopBtn} onPress={handleEnrollmentStop}>
+                  <Text style={styles.enrollmentPrimaryText}>Done Speaking</Text>
+                </TouchableOpacity>
+              ) : null}
+
+              {!enrollmentRecording && !enrollmentLoading && (
+                <TouchableOpacity style={styles.enrollmentSkipBtn} onPress={handleEnrollmentSkip}>
+                  <Text style={styles.enrollmentSkipText}>Skip Setup</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View style={styles.enrollmentSteps}>
+              <View style={[styles.enrollmentDot, enrollmentStep === 'them' && styles.enrollmentDotActive]} />
+              <View style={[styles.enrollmentDot, enrollmentStep === 'me' && styles.enrollmentDotActive]} />
+            </View>
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -623,5 +720,96 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: '#ff6b6b',
+  },
+  enrollmentOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#0a0a14ee',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  enrollmentTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: '800',
+    marginBottom: 12,
+  },
+  enrollmentSubtitle: {
+    color: '#bbb',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 8,
+    fontWeight: '600',
+  },
+  enrollmentHint: {
+    color: '#555',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 32,
+    lineHeight: 18,
+  },
+  enrollmentRecordingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginVertical: 24,
+  },
+  enrollmentRecordingText: {
+    color: '#ff6b6b',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  enrollmentActions: {
+    width: '100%',
+    gap: 12,
+    alignItems: 'center',
+  },
+  enrollmentPrimaryBtn: {
+    backgroundColor: '#6c63ff',
+    paddingVertical: 16,
+    paddingHorizontal: 40,
+    borderRadius: 14,
+    width: '100%',
+    alignItems: 'center',
+  },
+  enrollmentStopBtn: {
+    backgroundColor: '#ff6b6b33',
+    paddingVertical: 16,
+    paddingHorizontal: 40,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ff6b6b',
+    width: '100%',
+    alignItems: 'center',
+  },
+  enrollmentPrimaryText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  enrollmentSkipBtn: {
+    padding: 12,
+  },
+  enrollmentSkipText: {
+    color: '#444',
+    fontSize: 14,
+  },
+  enrollmentSteps: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 32,
+  },
+  enrollmentDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#333',
+  },
+  enrollmentDotActive: {
+    backgroundColor: '#6c63ff',
   },
 });

@@ -12,6 +12,7 @@ export const LANGUAGES = [
   { label: 'Korean', value: 'ko', name: 'Korean' },
   { label: 'Arabic', value: 'ar', name: 'Arabic' },
   { label: 'Hindi', value: 'hi', name: 'Hindi' },
+  { label: 'Telugu', value: 'te', name: 'Telugu' },
   { label: 'Turkish', value: 'tr', name: 'Turkish' },
   { label: 'Polish', value: 'pl', name: 'Polish' },
 ];

@@ -15,6 +15,7 @@ const LANG_TO_LOCALE: Record<string, string> = {
   ko: 'ko-KR',
   ar: 'ar-SA',
   hi: 'hi-IN',
+  te: 'te-IN',
   tr: 'tr-TR',
   pl: 'pl-PL',
 };

@@ -4,19 +4,30 @@ import { Alert, Linking } from 'react-native';
 
 type RecorderState = 'idle' | 'recording' | 'processing';
 
-const SPEECH_THRESHOLD_DB = -35;  // above this = someone is speaking
-const SILENCE_DURATION_MS  = 1200; // silence must last this long after speech ends
-const MIN_RECORDING_MS     = 400;  // ignore the first 400ms (mic startup noise)
+// Calibration: sample ambient noise for 1.5s before speech detection begins
+const CALIBRATION_MS     = 1500;
+const THRESHOLD_MARGIN_DB = 12;   // dB above noise floor to count as speech
+const MIN_THRESHOLD_DB   = -50;   // never go below this (prevents false quiet-room triggers)
+const MAX_THRESHOLD_DB   = -20;   // never go above this (prevents missing quiet speech)
+const DEFAULT_THRESHOLD_DB = -35; // fallback if calibration collects no samples
+
+const SILENCE_DURATION_MS = 1200;
+const MIN_RECORDING_MS    = 400;  // ignore the first 400ms (mic startup noise)
 
 export function useAudioRecorder() {
-  const recordingRef    = useRef<Audio.Recording | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
   const [state, setState] = useState<RecorderState>('idle');
 
-  const onSilenceRef        = useRef<(() => void) | null>(null);
-  const silenceFiredRef     = useRef(false);  // prevent double-fire
-  const speechDetectedRef   = useRef(false);  // true once audio > threshold seen
-  const silenceStartRef     = useRef<number | null>(null);
-  const recordingStartRef   = useRef<number>(0);
+  const onSilenceRef         = useRef<(() => void) | null>(null);
+  const silenceFiredRef      = useRef(false);
+  const speechDetectedRef    = useRef(false);
+  const silenceStartRef      = useRef<number | null>(null);
+  const recordingStartRef    = useRef<number>(0);
+
+  // Adaptive threshold state
+  const calibrationSamples   = useRef<number[]>([]);
+  const dynamicThreshold     = useRef<number>(DEFAULT_THRESHOLD_DB);
+  const calibrationDone      = useRef<boolean>(false);
 
   async function startRecording(onSilenceDetected?: () => void) {
     try {
@@ -52,11 +63,14 @@ export function useAudioRecorder() {
       });
 
       // Reset all detection state for this session
-      onSilenceRef.current      = onSilenceDetected ?? null;
-      silenceFiredRef.current   = false;
-      speechDetectedRef.current = false;
-      silenceStartRef.current   = null;
-      recordingStartRef.current = Date.now();
+      onSilenceRef.current       = onSilenceDetected ?? null;
+      silenceFiredRef.current    = false;
+      speechDetectedRef.current  = false;
+      silenceStartRef.current    = null;
+      recordingStartRef.current  = Date.now();
+      calibrationSamples.current = [];
+      dynamicThreshold.current   = DEFAULT_THRESHOLD_DB;
+      calibrationDone.current    = false;
 
       const { recording } = await Audio.Recording.createAsync(
         {
@@ -92,14 +106,33 @@ export function useAudioRecorder() {
 
           const db = status.metering ?? -160;
 
-          if (db >= SPEECH_THRESHOLD_DB) {
-            // ── Speech detected ──────────────────────────────────────────────
+          // ── Calibration phase ────────────────────────────────────────────
+          // Spend the first CALIBRATION_MS sampling the ambient noise floor.
+          if (!calibrationDone.current) {
+            if (elapsed < MIN_RECORDING_MS + CALIBRATION_MS) {
+              if (db > -100) calibrationSamples.current.push(db); // ignore invalid readings
+              return;
+            }
+            // Calibration window elapsed — compute dynamic threshold
+            const samples = calibrationSamples.current;
+            if (samples.length > 0) {
+              samples.sort((a, b) => a - b);
+              const p75 = samples[Math.floor(samples.length * 0.75)];
+              dynamicThreshold.current = Math.max(
+                MIN_THRESHOLD_DB,
+                Math.min(MAX_THRESHOLD_DB, p75 + THRESHOLD_MARGIN_DB),
+              );
+            }
+            calibrationDone.current = true;
+          }
+
+          // ── Speech detection using adaptive threshold ─────────────────────
+          const threshold = dynamicThreshold.current;
+
+          if (db >= threshold) {
             speechDetectedRef.current = true;
-            silenceStartRef.current   = null; // reset silence timer while talking
+            silenceStartRef.current   = null;
           } else if (speechDetectedRef.current) {
-            // ── Silence after speech ─────────────────────────────────────────
-            // Only start the silence timer once we've confirmed real speech.
-            // This prevents firing on ambient noise or an empty room.
             if (silenceStartRef.current === null) {
               silenceStartRef.current = Date.now();
             } else if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
@@ -107,10 +140,8 @@ export function useAudioRecorder() {
               onSilenceRef.current?.();
             }
           }
-          // If db < threshold AND speechDetectedRef is false → pure silence,
-          // no speech yet → do nothing, keep recording and waiting.
         },
-        100 // poll every 100ms
+        100
       );
 
       recordingRef.current = recording;
@@ -141,7 +172,6 @@ export function useAudioRecorder() {
     }
   }
 
-  // Discards current recording without processing — used when user is about to speak.
   async function cancelRecording(): Promise<void> {
     const recording = recordingRef.current;
     if (!recording) return;
