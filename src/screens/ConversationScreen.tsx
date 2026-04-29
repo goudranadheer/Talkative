@@ -53,12 +53,13 @@ export default function ConversationScreen({ navigation }: Props) {
   const isRecording = recorderState === 'recording';
   const isProcessing = recorderState === 'processing' || loading;
 
-  // Auto-start mic when the conversation screen opens
+  // Auto-start mic when the conversation screen opens; stop it on unmount
   useEffect(() => {
     if (!micEnabled) return;
     startListening();
     return () => {
       micActiveRef.current = false;
+      cancelRecording(); // releases the expo-av recording object so a new one can be created
     };
   }, []);
 

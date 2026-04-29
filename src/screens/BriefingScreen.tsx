@@ -20,7 +20,7 @@ type Props = {
 };
 
 export default function BriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, groqApiKey, setGroqApiKey, deepseekApiKey, setDeepseekApiKey, translationMode, setTranslationMode } = useApp();
+  const { briefing, setBriefing, groqApiKey, setGroqApiKey, deepseekApiKey, setDeepseekApiKey, translationMode, setTranslationMode, clearMessages } = useApp();
   const [myLanguage, setMyLanguage] = useState<Language | null>(briefing.myLanguage);
   const [theirLanguage, setTheirLanguage] = useState<Language | null>(briefing.theirLanguage);
   const [context, setContext] = useState(briefing.context);
@@ -38,6 +38,7 @@ export default function BriefingScreen({ navigation }: Props) {
     (mode === 'detailed' || context.trim().length > 0);
 
   function handleStart() {
+    clearMessages(); // always start fresh when tapping Start Conversation
     setBriefing({ myLanguage, theirLanguage, context, mode });
     setGroqApiKey(localGroqKey.trim());
     setDeepseekApiKey(localDeepseekKey.trim());
