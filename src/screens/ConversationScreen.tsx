@@ -41,7 +41,8 @@ export default function ConversationScreen({ navigation }: Props) {
   const lastTTSEndTimeRef = useRef<number | null>(null);
   const listRef = useRef<FlatList>(null);
   const micActiveRef = useRef(false);
-  const isProcessingRef = useRef(false); // prevents concurrent processRecording calls
+  const isProcessingRef = useRef(false);
+  const processingQueueRef = useRef<string[]>([]); // URIs waiting to be transcribed
   const lastSuggestionRef = useRef<string | null>(null);
   const lastSuggestionClearRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -177,9 +178,63 @@ export default function ConversationScreen({ navigation }: Props) {
     await handleTranslateText(text, activeSpeaker);
   }
 
+  // Called by VAD when silence is detected. Stops the current recording,
+  // restarts it immediately (so the next utterance is never missed), then
+  // queues the audio URI for serial processing.
   async function handleSilenceDetected() {
     if (!micActiveRef.current) return;
-    await processRecording();
+
+    const uri = await stopRecording();
+
+    if (micActiveRef.current) {
+      await startRecording(handleSilenceDetected);
+    }
+
+    if (uri) {
+      processingQueueRef.current.push(uri);
+      if (!isProcessingRef.current) drainProcessingQueue();
+    }
+  }
+
+  // Drains queued URIs one at a time. Concurrent calls are no-ops.
+  async function drainProcessingQueue() {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    try {
+      while (processingQueueRef.current.length > 0) {
+        const uri = processingQueueRef.current.shift()!;
+        await processUri(uri);
+      }
+    } finally {
+      isProcessingRef.current = false;
+    }
+  }
+
+  async function processUri(uri: string) {
+    setLoading(true);
+    try {
+      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
+      if (!text) return;
+
+      if (isSimilarToSuggestion(text)) {
+        lastSuggestionRef.current = null;
+        return;
+      }
+
+      const myLangCode = myLang.value.toLowerCase().split('-')[0];
+      const detected   = detectedLanguage.toLowerCase().split('-')[0];
+      const speaker    = detectSpeaker(detected, { me: null, them: null }, myLangCode, lastTTSEndTimeRef.current);
+
+      if (speaker === 'me') return;
+
+      await handleTranslateText(text, 'them');
+    } catch (e: any) {
+      console.error('Hands-free error:', e);
+      setError(e?.message ?? 'Transcription failed.');
+      micActiveRef.current = false;
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function startListening() {
@@ -187,6 +242,7 @@ export default function ConversationScreen({ navigation }: Props) {
     stopSpeech();
     setSpeakingId(null);
     setError('');
+    processingQueueRef.current = [];
     try {
       await startRecording(handleSilenceDetected);
     } catch (e: any) {
@@ -200,57 +256,10 @@ export default function ConversationScreen({ navigation }: Props) {
 
     if (isRecording || recorderState === 'processing') {
       micActiveRef.current = false;
+      processingQueueRef.current = [];
       await cancelRecording();
     } else {
       await startListening();
-    }
-  }
-
-  async function processRecording() {
-    if (isProcessingRef.current) return;
-    isProcessingRef.current = true;
-
-    try {
-      const uri = await stopRecording();
-      if (!uri) return;
-
-      setLoading(true);
-
-      // Restart mic immediately so we don't miss the next utterance
-      if (micActiveRef.current) {
-        await startRecording(handleSilenceDetected);
-      }
-
-      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
-      if (!text) {
-        setLoading(false);
-        return;
-      }
-
-      if (isSimilarToSuggestion(text)) {
-        lastSuggestionRef.current = null;
-        setLoading(false);
-        return;
-      }
-
-      // Language-based speaker detection (no enrollment needed)
-      const myLangCode = myLang.value.toLowerCase().split('-')[0];
-      const detected   = detectedLanguage.toLowerCase().split('-')[0];
-      const speaker    = detectSpeaker(detected, { me: null, them: null }, myLangCode, lastTTSEndTimeRef.current);
-
-      if (speaker === 'me') {
-        setLoading(false);
-        return;
-      }
-
-      await handleTranslateText(text, 'them');
-    } catch (e: any) {
-      console.error('Hands-free error:', e);
-      setError(e?.message ?? 'Transcription failed.');
-      micActiveRef.current = false;
-    } finally {
-      isProcessingRef.current = false;
-      setLoading(false);
     }
   }
 
