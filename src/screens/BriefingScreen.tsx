@@ -43,7 +43,7 @@ export default function BriefingScreen({ navigation }: Props) {
     setGroqApiKey(localGroqKey.trim());
     setDeepseekApiKey(localDeepseekKey.trim());
     if (mode === 'detailed') {
-      navigation.navigate('DetailedBriefing' as any);
+      navigation.navigate('DetailedBriefing');
     } else {
       navigation.navigate('Conversation');
     }

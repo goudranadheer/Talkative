@@ -42,7 +42,7 @@ export default function ConversationScreen({ navigation }: Props) {
   const listRef = useRef<FlatList>(null);
   const micActiveRef = useRef(false);
   const isProcessingRef = useRef(false);
-  const processingQueueRef = useRef<string[]>([]); // URIs waiting to be transcribed
+  const processingQueueRef = useRef<string[]>([]);
   const lastSuggestionRef = useRef<string | null>(null);
   const lastSuggestionClearRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -59,6 +59,7 @@ export default function ConversationScreen({ navigation }: Props) {
     if (!micEnabled) return;
     startListening();
     return () => {
+      if (lastSuggestionClearRef.current) clearTimeout(lastSuggestionClearRef.current);
       micActiveRef.current = false;
       cancelRecording(); // releases the expo-av recording object so a new one can be created
     };
@@ -75,6 +76,13 @@ export default function ConversationScreen({ navigation }: Props) {
     const matches = tWords.filter(w => sWords.has(w)).length;
     return matches / tWords.length >= 0.5;
   }
+
+  useEffect(() => {
+    if (!briefing.myLanguage || !briefing.theirLanguage) {
+      navigation.replace('Briefing');
+    }
+  }, []);
+
 
   async function speakTranslation(msg: Message) {
     const targetLang = msg.speaker === 'them' ? myLang : theirLang;
@@ -254,7 +262,7 @@ export default function ConversationScreen({ navigation }: Props) {
   async function handleMicToggle() {
     if (isProcessing) return;
 
-    if (isRecording || recorderState === 'processing') {
+    if (isRecording) {
       micActiveRef.current = false;
       processingQueueRef.current = [];
       await cancelRecording();
