@@ -4,19 +4,19 @@ import { Alert, Linking } from 'react-native';
 
 type RecorderState = 'idle' | 'recording' | 'processing';
 
-// Calibration: sample ambient noise for 1.5s before speech detection begins
-const CALIBRATION_MS     = 1500;
-const THRESHOLD_MARGIN_DB = 12;   // dB above noise floor to count as speech
-const MIN_THRESHOLD_DB   = -50;   // never go below this (prevents false quiet-room triggers)
-const MAX_THRESHOLD_DB   = -20;   // never go above this (prevents missing quiet speech)
-const DEFAULT_THRESHOLD_DB = -35; // fallback if calibration collects no samples
+const CALIBRATION_MS      = 1500;
+const THRESHOLD_MARGIN_DB = 12;
+const MIN_THRESHOLD_DB    = -50;
+const MAX_THRESHOLD_DB    = -20;
+const DEFAULT_THRESHOLD_DB = -35;
 
-const SILENCE_DURATION_MS = 1200;
-const MIN_RECORDING_MS    = 400;  // ignore the first 400ms (mic startup noise)
+const SILENCE_DURATION_MS = 900;  // reduced from 1200ms for snappier detection
+const MIN_RECORDING_MS    = 300;  // reduced from 400ms
 
 export function useAudioRecorder() {
   const recordingRef = useRef<Audio.Recording | null>(null);
   const [state, setState] = useState<RecorderState>('idle');
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
 
   const onSilenceRef         = useRef<(() => void) | null>(null);
   const silenceFiredRef      = useRef(false);
@@ -24,10 +24,16 @@ export function useAudioRecorder() {
   const silenceStartRef      = useRef<number | null>(null);
   const recordingStartRef    = useRef<number>(0);
 
-  // Adaptive threshold state
   const calibrationSamples   = useRef<number[]>([]);
   const dynamicThreshold     = useRef<number>(DEFAULT_THRESHOLD_DB);
   const calibrationDone      = useRef<boolean>(false);
+
+  // Persists calibrated threshold across recording restarts so we don't
+  // waste 1.9s recalibrating on every utterance (the root cause of merging).
+  const savedThresholdRef    = useRef<number | null>(null);
+
+  // Prevents setIsVoiceActive spam on every metering tick
+  const voiceActiveRef       = useRef(false);
 
   async function startRecording(onSilenceDetected?: () => void) {
     try {
@@ -62,15 +68,26 @@ export function useAudioRecorder() {
         playThroughEarpieceAndroid: false,
       });
 
-      // Reset all detection state for this session
       onSilenceRef.current       = onSilenceDetected ?? null;
       silenceFiredRef.current    = false;
       speechDetectedRef.current  = false;
       silenceStartRef.current    = null;
       recordingStartRef.current  = Date.now();
-      calibrationSamples.current = [];
-      dynamicThreshold.current   = DEFAULT_THRESHOLD_DB;
-      calibrationDone.current    = false;
+
+      voiceActiveRef.current = false;
+      setIsVoiceActive(false);
+
+      // Reuse previously calibrated threshold — skips the 1.9s dead zone
+      // that caused consecutive utterances to be merged.
+      if (savedThresholdRef.current !== null) {
+        dynamicThreshold.current  = savedThresholdRef.current;
+        calibrationDone.current   = true;
+        calibrationSamples.current = [];
+      } else {
+        calibrationSamples.current = [];
+        dynamicThreshold.current   = DEFAULT_THRESHOLD_DB;
+        calibrationDone.current    = false;
+      }
 
       const { recording } = await Audio.Recording.createAsync(
         {
@@ -106,14 +123,12 @@ export function useAudioRecorder() {
 
           const db = status.metering ?? -160;
 
-          // ── Calibration phase ────────────────────────────────────────────
-          // Spend the first CALIBRATION_MS sampling the ambient noise floor.
+          // ── Calibration phase (first recording only) ──────────────────────
           if (!calibrationDone.current) {
             if (elapsed < MIN_RECORDING_MS + CALIBRATION_MS) {
-              if (db > -100) calibrationSamples.current.push(db); // ignore invalid readings
+              if (db > -100) calibrationSamples.current.push(db);
               return;
             }
-            // Calibration window elapsed — compute dynamic threshold
             const samples = calibrationSamples.current;
             if (samples.length > 0) {
               samples.sort((a, b) => a - b);
@@ -123,20 +138,29 @@ export function useAudioRecorder() {
                 Math.min(MAX_THRESHOLD_DB, p75 + THRESHOLD_MARGIN_DB),
               );
             }
+            savedThresholdRef.current = dynamicThreshold.current;
             calibrationDone.current = true;
           }
 
-          // ── Speech detection using adaptive threshold ─────────────────────
+          // ── Speech / silence detection ────────────────────────────────────
           const threshold = dynamicThreshold.current;
+          const nowActive = db >= threshold;
 
-          if (db >= threshold) {
+          if (nowActive !== voiceActiveRef.current) {
+            voiceActiveRef.current = nowActive;
+            setIsVoiceActive(nowActive);
+          }
+
+          if (nowActive) {
             speechDetectedRef.current = true;
             silenceStartRef.current   = null;
           } else if (speechDetectedRef.current) {
             if (silenceStartRef.current === null) {
               silenceStartRef.current = Date.now();
             } else if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
-              silenceFiredRef.current = true;
+              silenceFiredRef.current    = true;
+              voiceActiveRef.current     = false;
+              setIsVoiceActive(false);
               onSilenceRef.current?.();
             }
           }
@@ -159,6 +183,8 @@ export function useAudioRecorder() {
 
     onSilenceRef.current    = null;
     silenceFiredRef.current = true;
+    voiceActiveRef.current  = false;
+    setIsVoiceActive(false);
 
     setState('processing');
     try {
@@ -177,11 +203,14 @@ export function useAudioRecorder() {
     if (!recording) return;
     onSilenceRef.current    = null;
     silenceFiredRef.current = true;
+    voiceActiveRef.current  = false;
+    setIsVoiceActive(false);
+    savedThresholdRef.current = null; // reset calibration on full session cancel
     try { await recording.stopAndUnloadAsync(); } catch (_) {}
     try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch (_) {}
     recordingRef.current = null;
     setState('idle');
   }
 
-  return { state, startRecording, stopRecording, cancelRecording };
+  return { state, startRecording, stopRecording, cancelRecording, isVoiceActive };
 }

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import { translate } from '../services/translator';
 import { translateWithReasoning, generateSuggestions } from '../services/reasoning';
 import { transcribe } from '../services/stt';
 import { speak, stopSpeech } from '../services/tts';
-import { enrollSpeaker, detectSpeaker, EnrolledSpeaker } from '../services/speaker';
+import { detectSpeaker } from '../services/speaker';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -37,27 +37,16 @@ export default function ConversationScreen({ navigation }: Props) {
   const [error, setError] = useState('');
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [lastDetectedSpeaker, setLastDetectedSpeaker] = useState<ActiveSpeaker | null>(null);
-
-  // Voice enrollment
-  const [enrollmentStep, setEnrollmentStep] = useState<'them' | 'me' | null>(null);
-  const [hasEnrolled, setHasEnrolled] = useState(false);
-  const [enrollmentRecording, setEnrollmentRecording] = useState(false);
-  const [enrollmentLoading, setEnrollmentLoading] = useState(false);
-  const [enrolledSpeakers, setEnrolledSpeakers] = useState<{
-    me: EnrolledSpeaker | null;
-    them: EnrolledSpeaker | null;
-  }>({ me: null, them: null });
 
   const lastTTSEndTimeRef = useRef<number | null>(null);
-
   const listRef = useRef<FlatList>(null);
-  const { state: recorderState, startRecording, stopRecording } = useAudioRecorder();
-
-  // Stores the translated text of the last suggestion the user tapped (in their language),
-  // so processRecording can compare transcriptions against it and filter out the user's own voice.
+  const micActiveRef = useRef(false);
+  const isProcessingRef = useRef(false);
+  const processingQueueRef = useRef<string[]>([]); // URIs waiting to be transcribed
   const lastSuggestionRef = useRef<string | null>(null);
   const lastSuggestionClearRef = useRef<NodeJS.Timeout | null>(null);
+
+  const { state: recorderState, startRecording, stopRecording, cancelRecording, isVoiceActive } = useAudioRecorder();
 
   const myLang = briefing.myLanguage!;
   const theirLang = briefing.theirLanguage!;
@@ -65,9 +54,16 @@ export default function ConversationScreen({ navigation }: Props) {
   const isRecording = recorderState === 'recording';
   const isProcessing = recorderState === 'processing' || loading;
 
-  // Returns true if the transcribed text is close enough to the last suggestion
-  // that the mic almost certainly picked up the user reading the chip aloud.
-  // Uses word overlap: ≥50% of transcribed words appear in the suggestion → same sentence.
+  // Auto-start mic when the conversation screen opens; stop it on unmount
+  useEffect(() => {
+    if (!micEnabled) return;
+    startListening();
+    return () => {
+      micActiveRef.current = false;
+      cancelRecording(); // releases the expo-av recording object so a new one can be created
+    };
+  }, []);
+
   function isSimilarToSuggestion(transcribed: string): boolean {
     const stored = lastSuggestionRef.current;
     if (!stored) return false;
@@ -78,37 +74,6 @@ export default function ConversationScreen({ navigation }: Props) {
     if (tWords.length === 0) return false;
     const matches = tWords.filter(w => sWords.has(w)).length;
     return matches / tWords.length >= 0.5;
-  }
-
-  // Debounce suggestion generation — waits 1.5s after the last chunk
-  // so suggestions only fire once after the other person stops talking,
-  // not once per 5-second recording chunk while they are mid-sentence.
-  const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingMessagesRef = useRef<Message[]>([]);
-
-  function scheduleSuggestions(currentMessages: Message[]) {
-    pendingMessagesRef.current = currentMessages;
-    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
-    suggestionTimerRef.current = setTimeout(async () => {
-      try {
-        const sugs = await generateSuggestions({
-          history: pendingMessagesRef.current,
-          conversationContext: briefing.context,
-          myLanguage: myLang.name,
-          theirLanguage: theirLang.name,
-          groqApiKey,
-          deepseekApiKey: deepseekApiKey || undefined,
-        });
-        setSuggestions(sugs);
-      } catch (e) {
-        console.error('Failed to update suggestions:', e);
-      }
-    }, 1500);
-  }
-
-  function cancelSuggestions() {
-    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
-    setSuggestions([]);
   }
 
   async function speakTranslation(msg: Message) {
@@ -127,11 +92,10 @@ export default function ConversationScreen({ navigation }: Props) {
     setLoading(true);
 
     const fromLang = speaker === 'them' ? theirLang : myLang;
-    const toLang = speaker === 'them' ? myLang : theirLang;
+    const toLang   = speaker === 'them' ? myLang : theirLang;
 
     try {
       let translated: string;
-
       if (translationMode === 'reasoning') {
         translated = await translateWithReasoning({
           text,
@@ -163,30 +127,36 @@ export default function ConversationScreen({ navigation }: Props) {
       addMessage(msg);
       const newMessages = [...messages, msg];
 
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+
       if (speaker === 'them') {
-        scheduleSuggestions(newMessages);
+        // Fire suggestions in parallel with TTS — don't block
+        generateSuggestions({
+          history: newMessages,
+          conversationContext: briefing.context,
+          myLanguage: myLang.name,
+          theirLanguage: theirLang.name,
+          groqApiKey,
+          deepseekApiKey: deepseekApiKey || undefined,
+        }).then(sugs => setSuggestions(sugs)).catch(() => {});
+
+        if (ttsEnabled) {
+          await speak(msg.translated, myLang.value);
+          lastTTSEndTimeRef.current = Date.now();
+        }
       } else {
-        // User tapped a suggestion — store its translation so the mic can
-        // recognise and ignore the user reading it aloud.
+        // User sent a message — clear suggestions and store translation for similarity check
+        setSuggestions([]);
         if (lastSuggestionClearRef.current) clearTimeout(lastSuggestionClearRef.current);
         lastSuggestionRef.current = msg.translated;
         lastSuggestionClearRef.current = setTimeout(() => {
           lastSuggestionRef.current = null;
         }, 15000);
 
-        // Cancel any pending suggestion and clear the panel
-        cancelSuggestions();
-      }
-
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
-
-      if (ttsEnabled) {
-        if (speaker === 'them') {
-          await speak(msg.translated, myLang.value);
-        } else {
+        if (ttsEnabled) {
           await speak(msg.translated, theirLang.value);
+          lastTTSEndTimeRef.current = Date.now();
         }
-        lastTTSEndTimeRef.current = Date.now();
       }
     } catch (e: any) {
       setError(e?.message ?? 'Translation failed.');
@@ -198,8 +168,6 @@ export default function ConversationScreen({ navigation }: Props) {
   async function handleSuggestionPress(suggestion: string) {
     if (isProcessing) return;
     setInputText('');
-    // Mic keeps running — similarity check in processRecording will ignore
-    // any transcription that matches what the user reads aloud.
     await handleTranslateText(suggestion, 'me');
   }
 
@@ -210,12 +178,63 @@ export default function ConversationScreen({ navigation }: Props) {
     await handleTranslateText(text, activeSpeaker);
   }
 
-  const micActiveRef = useRef(false); // tracks if hands-free session is on
-
-  // Called by the silence detector in useAudioRecorder when the other person stops talking
+  // Called by VAD when silence is detected. Stops the current recording,
+  // restarts it immediately (so the next utterance is never missed), then
+  // queues the audio URI for serial processing.
   async function handleSilenceDetected() {
     if (!micActiveRef.current) return;
-    await processRecording();
+
+    const uri = await stopRecording();
+
+    if (micActiveRef.current) {
+      await startRecording(handleSilenceDetected);
+    }
+
+    if (uri) {
+      processingQueueRef.current.push(uri);
+      if (!isProcessingRef.current) drainProcessingQueue();
+    }
+  }
+
+  // Drains queued URIs one at a time. Concurrent calls are no-ops.
+  async function drainProcessingQueue() {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    try {
+      while (processingQueueRef.current.length > 0) {
+        const uri = processingQueueRef.current.shift()!;
+        await processUri(uri);
+      }
+    } finally {
+      isProcessingRef.current = false;
+    }
+  }
+
+  async function processUri(uri: string) {
+    setLoading(true);
+    try {
+      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
+      if (!text) return;
+
+      if (isSimilarToSuggestion(text)) {
+        lastSuggestionRef.current = null;
+        return;
+      }
+
+      const myLangCode = myLang.value.toLowerCase().split('-')[0];
+      const detected   = detectedLanguage.toLowerCase().split('-')[0];
+      const speaker    = detectSpeaker(detected, { me: null, them: null }, myLangCode, lastTTSEndTimeRef.current);
+
+      if (speaker === 'me') return;
+
+      await handleTranslateText(text, 'them');
+    } catch (e: any) {
+      console.error('Hands-free error:', e);
+      setError(e?.message ?? 'Transcription failed.');
+      micActiveRef.current = false;
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function startListening() {
@@ -223,6 +242,7 @@ export default function ConversationScreen({ navigation }: Props) {
     stopSpeech();
     setSpeakingId(null);
     setError('');
+    processingQueueRef.current = [];
     try {
       await startRecording(handleSilenceDetected);
     } catch (e: any) {
@@ -234,100 +254,14 @@ export default function ConversationScreen({ navigation }: Props) {
   async function handleMicToggle() {
     if (isProcessing) return;
 
-    if (isRecording) {
+    if (isRecording || recorderState === 'processing') {
       micActiveRef.current = false;
-      if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
-      await processRecording();
-    } else if (!hasEnrolled) {
-      // First time — offer voice enrollment before starting
-      setEnrollmentStep('them');
+      processingQueueRef.current = [];
+      await cancelRecording();
     } else {
       await startListening();
     }
   }
-
-  async function handleEnrollmentRecord() {
-    setEnrollmentRecording(true);
-    await startRecording(); // no silence callback — manual stop
-  }
-
-  async function handleEnrollmentStop() {
-    const uri = await stopRecording();
-    setEnrollmentRecording(false);
-
-    if (uri && groqApiKey && enrollmentStep) {
-      setEnrollmentLoading(true);
-      try {
-        const enrolled = await enrollSpeaker(uri, groqApiKey, enrollmentStep);
-        setEnrolledSpeakers(prev => ({ ...prev, [enrollmentStep]: enrolled }));
-      } catch (_) {
-        // Enrollment failed — continue without that speaker registered
-      } finally {
-        setEnrollmentLoading(false);
-      }
-    }
-
-    if (enrollmentStep === 'them') {
-      setEnrollmentStep('me');
-    } else {
-      setEnrollmentStep(null);
-      setHasEnrolled(true);
-      await startListening();
-    }
-  }
-
-  async function handleEnrollmentSkip() {
-    setEnrollmentStep(null);
-    setHasEnrolled(true);
-    await startListening();
-  }
-
-  async function processRecording() {
-    try {
-      const uri = await stopRecording();
-      if (!uri) return;
-
-      setLoading(true);
-
-      // Restart listening immediately so we don't miss the next utterance
-      if (micActiveRef.current) {
-        await startRecording(handleSilenceDetected);
-      }
-
-      const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
-      if (!text) {
-        setLoading(false);
-        return;
-      }
-
-      // Similarity check first — catch user reading suggestion aloud regardless of language
-      if (isSimilarToSuggestion(text)) {
-        lastSuggestionRef.current = null;
-        setLoading(false);
-        return;
-      }
-
-      // Multi-signal speaker detection: enrollment match → TTS timing → language fallback
-      const myLangCode = myLang.value.toLowerCase().split('-')[0];
-      const detected   = detectedLanguage.toLowerCase().split('-')[0];
-      const speaker    = detectSpeaker(detected, enrolledSpeakers, myLangCode, lastTTSEndTimeRef.current);
-
-      if (speaker === 'me') {
-        setLoading(false);
-        return;
-      }
-
-      setLastDetectedSpeaker('them');
-      await handleTranslateText(text, 'them');
-    } catch (e: any) {
-      console.error('Hands-free error:', e);
-      setError(e?.message ?? 'Transcription failed.');
-      micActiveRef.current = false;
-    } finally {
-      setLoading(false);
-    }
-  }
-
 
   async function handleReplay(msg: Message) {
     if (speakingId) {
@@ -354,11 +288,8 @@ export default function ConversationScreen({ navigation }: Props) {
         </View>
 
         {isMe ? (
-          // Your response — show only the translation (what to say aloud)
-          // No need to repeat the original chip text the user already read
           <Text style={styles.bubbleTranslated}>{item.translated}</Text>
         ) : (
-          // Other person — show what they said + your language translation
           <>
             <Text style={styles.bubbleOriginal}>{item.original}</Text>
             <View style={styles.divider} />
@@ -415,16 +346,32 @@ export default function ConversationScreen({ navigation }: Props) {
               <View style={styles.emptyState}>
                 <Text style={styles.emptyText}>Conversation will appear here</Text>
                 <Text style={styles.emptySubText}>
-                  {micEnabled ? 'Tap the mic to start listening' : 'Type what was said and tap send'}
+                  {micEnabled ? 'Listening automatically — just start talking' : 'Type what was said and tap send'}
                 </Text>
               </View>
+            }
+            ListFooterComponent={
+              // Live voice indicator at the bottom of the message list
+              isRecording && (isVoiceActive || isProcessing) ? (
+                <View style={[styles.bubble, styles.bubbleThem, styles.previewBubble]}>
+                  {isVoiceActive ? (
+                    <View style={styles.voiceDots}>
+                      <View style={styles.voiceDot} />
+                      <View style={styles.voiceDot} />
+                      <View style={styles.voiceDot} />
+                    </View>
+                  ) : (
+                    <ActivityIndicator size="small" color="#6c63ff" />
+                  )}
+                </View>
+              ) : null
             }
           />
         </View>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {/* Suggestions — only shown after the other person speaks */}
+        {/* Suggestions */}
         {suggestions.length > 0 && (
           <View style={styles.suggestionsContainer}>
             <Text style={styles.suggestionsLabel}>REPLY WITH ({myLang.name}):</Text>
@@ -471,23 +418,26 @@ export default function ConversationScreen({ navigation }: Props) {
               <View style={styles.micHint}>
                 {isProcessing ? (
                   <ActivityIndicator color="#6c63ff" />
-                ) : isRecording ? (
+                ) : isVoiceActive ? (
                   <View style={styles.listeningRow}>
                     <View style={styles.listeningDot} />
-                    <Text style={styles.micHintText}>
-                      Listening for {theirLang.name}...
-                    </Text>
+                    <Text style={styles.micHintText}>Speaking...</Text>
+                  </View>
+                ) : isRecording ? (
+                  <View style={styles.listeningRow}>
+                    <View style={[styles.listeningDot, styles.listeningDotIdle]} />
+                    <Text style={styles.micHintText}>Listening...</Text>
                   </View>
                 ) : (
-                  <Text style={styles.micHintText}>Tap mic to start listening</Text>
+                  <Text style={styles.micHintText}>Tap mic to start</Text>
                 )}
               </View>
               <Pressable
-                style={[styles.micBtn, isRecording && styles.micBtnActive]}
+                style={[styles.micBtn, isRecording && styles.micBtnActive, isVoiceActive && styles.micBtnVoice]}
                 onPress={handleMicToggle}
                 disabled={isProcessing}
               >
-                <Text style={styles.micBtnIcon}>{isRecording ? '⏹' : '🎙'}</Text>
+                <Text style={styles.micBtnIcon}>{isRecording ? '⏸' : '🎙'}</Text>
               </Pressable>
             </>
           ) : (
@@ -515,52 +465,6 @@ export default function ConversationScreen({ navigation }: Props) {
             </>
           )}
         </View>
-        {/* Voice enrollment overlay */}
-        {enrollmentStep !== null && (
-          <View style={styles.enrollmentOverlay}>
-            <Text style={styles.enrollmentTitle}>Voice Setup</Text>
-            <Text style={styles.enrollmentSubtitle}>
-              {enrollmentStep === 'them'
-                ? `Ask the ${theirLang.name} speaker to say a few words`
-                : `Now say a few words yourself in ${myLang.name}`}
-            </Text>
-            <Text style={styles.enrollmentHint}>
-              This helps the app tell your voices apart — even when both speak the same language.
-            </Text>
-
-            {enrollmentLoading ? (
-              <ActivityIndicator color="#6c63ff" style={{ marginVertical: 24 }} />
-            ) : enrollmentRecording ? (
-              <View style={styles.enrollmentRecordingRow}>
-                <View style={styles.listeningDot} />
-                <Text style={styles.enrollmentRecordingText}>Listening…</Text>
-              </View>
-            ) : null}
-
-            <View style={styles.enrollmentActions}>
-              {!enrollmentRecording && !enrollmentLoading ? (
-                <TouchableOpacity style={styles.enrollmentPrimaryBtn} onPress={handleEnrollmentRecord}>
-                  <Text style={styles.enrollmentPrimaryText}>Start Recording</Text>
-                </TouchableOpacity>
-              ) : enrollmentRecording ? (
-                <TouchableOpacity style={styles.enrollmentStopBtn} onPress={handleEnrollmentStop}>
-                  <Text style={styles.enrollmentPrimaryText}>Done Speaking</Text>
-                </TouchableOpacity>
-              ) : null}
-
-              {!enrollmentRecording && !enrollmentLoading && (
-                <TouchableOpacity style={styles.enrollmentSkipBtn} onPress={handleEnrollmentSkip}>
-                  <Text style={styles.enrollmentSkipText}>Skip Setup</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <View style={styles.enrollmentSteps}>
-              <View style={[styles.enrollmentDot, enrollmentStep === 'them' && styles.enrollmentDotActive]} />
-              <View style={[styles.enrollmentDot, enrollmentStep === 'me' && styles.enrollmentDotActive]} />
-            </View>
-          </View>
-        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -595,7 +499,7 @@ const styles = StyleSheet.create({
   contextText: { color: '#888', fontSize: 12 },
   messageList: {
     padding: 16,
-    paddingBottom: 200, // Extra padding so content isn't hidden by bottom bar
+    paddingBottom: 200,
     flexGrow: 1,
   },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
@@ -610,6 +514,9 @@ const styles = StyleSheet.create({
   },
   bubbleMe: { alignSelf: 'flex-end', backgroundColor: '#1a1a3e', borderColor: '#6c63ff44' },
   bubbleThem: { alignSelf: 'flex-start', backgroundColor: '#1e1e2e', borderColor: '#333' },
+  previewBubble: { opacity: 0.6, minWidth: 60, alignItems: 'center' },
+  voiceDots: { flexDirection: 'row', gap: 6, paddingVertical: 4 },
+  voiceDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#6c63ff' },
   bubbleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   bubbleSpeaker: { fontSize: 11, color: '#666', fontWeight: '600', textTransform: 'uppercase' },
   replayBtn: { padding: 4 },
@@ -672,8 +579,12 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#6c63ff',
   },
-  micBtnActive: { backgroundColor: '#6c63ff33', borderColor: '#ff6b6b' },
+  micBtnActive: { backgroundColor: '#6c63ff22', borderColor: '#6c63ff' },
+  micBtnVoice: { backgroundColor: '#6c63ff44', borderColor: '#ff6b6b' },
   micBtnIcon: { fontSize: 28 },
+  listeningRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  listeningDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff6b6b' },
+  listeningDotIdle: { backgroundColor: '#6c63ff' },
   suggestionsContainer: {
     paddingVertical: 12,
     backgroundColor: '#0a0a1a',
@@ -689,10 +600,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     letterSpacing: 1,
   },
-  suggestionsScroll: {
-    paddingHorizontal: 16,
-    gap: 8,
-  },
+  suggestionsScroll: { paddingHorizontal: 16, gap: 8 },
   suggestionChip: {
     backgroundColor: '#1a1a3e',
     paddingHorizontal: 16,
@@ -701,115 +609,5 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#6c63ff44',
   },
-  suggestionChipPrediction: {
-    backgroundColor: '#1e2a1e',
-    borderColor: '#44aa6644',
-  },
-  suggestionText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  listeningRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  listeningDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#ff6b6b',
-  },
-  enrollmentOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#0a0a14ee',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-  },
-  enrollmentTitle: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '800',
-    marginBottom: 12,
-  },
-  enrollmentSubtitle: {
-    color: '#bbb',
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  enrollmentHint: {
-    color: '#555',
-    fontSize: 13,
-    textAlign: 'center',
-    marginBottom: 32,
-    lineHeight: 18,
-  },
-  enrollmentRecordingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginVertical: 24,
-  },
-  enrollmentRecordingText: {
-    color: '#ff6b6b',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  enrollmentActions: {
-    width: '100%',
-    gap: 12,
-    alignItems: 'center',
-  },
-  enrollmentPrimaryBtn: {
-    backgroundColor: '#6c63ff',
-    paddingVertical: 16,
-    paddingHorizontal: 40,
-    borderRadius: 14,
-    width: '100%',
-    alignItems: 'center',
-  },
-  enrollmentStopBtn: {
-    backgroundColor: '#ff6b6b33',
-    paddingVertical: 16,
-    paddingHorizontal: 40,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#ff6b6b',
-    width: '100%',
-    alignItems: 'center',
-  },
-  enrollmentPrimaryText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  enrollmentSkipBtn: {
-    padding: 12,
-  },
-  enrollmentSkipText: {
-    color: '#444',
-    fontSize: 14,
-  },
-  enrollmentSteps: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 32,
-  },
-  enrollmentDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#333',
-  },
-  enrollmentDotActive: {
-    backgroundColor: '#6c63ff',
-  },
+  suggestionText: { color: '#fff', fontSize: 14, fontWeight: '500' },
 });
