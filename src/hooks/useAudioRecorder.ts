@@ -4,14 +4,15 @@ import { Alert, Linking } from 'react-native';
 
 type RecorderState = 'idle' | 'recording' | 'processing';
 
-const CALIBRATION_MS      = 1500;
-const THRESHOLD_MARGIN_DB = 12;
-const MIN_THRESHOLD_DB    = -50;
-const MAX_THRESHOLD_DB    = -20;
+const CALIBRATION_MS       = 1500;
+const THRESHOLD_MARGIN_DB  = 12;
+const MIN_THRESHOLD_DB     = -50;
+const MAX_THRESHOLD_DB     = -20;
 const DEFAULT_THRESHOLD_DB = -35;
 
-const SILENCE_DURATION_MS = 900;  // reduced from 1200ms for snappier detection
-const MIN_RECORDING_MS    = 300;  // reduced from 400ms
+const SILENCE_DURATION_MS  = 1100; // enough to avoid splitting mid-sentence pauses
+const MIN_RECORDING_MS     = 400;
+const MIN_SPEECH_MS        = 600;  // discard recordings where voice was active < 600ms (noise)
 
 export function useAudioRecorder() {
   const recordingRef = useRef<Audio.Recording | null>(null);
@@ -34,6 +35,10 @@ export function useAudioRecorder() {
 
   // Prevents setIsVoiceActive spam on every metering tick
   const voiceActiveRef       = useRef(false);
+
+  // Tracks total milliseconds voice was above threshold in the current recording
+  const speechDurationMsRef  = useRef(0);
+  const speechStartTimeRef   = useRef<number | null>(null);
 
   async function startRecording(onSilenceDetected?: () => void) {
     try {
@@ -74,7 +79,9 @@ export function useAudioRecorder() {
       silenceStartRef.current    = null;
       recordingStartRef.current  = Date.now();
 
-      voiceActiveRef.current = false;
+      voiceActiveRef.current    = false;
+      speechDurationMsRef.current = 0;
+      speechStartTimeRef.current  = null;
       setIsVoiceActive(false);
 
       // Reuse previously calibrated threshold — skips the 1.9s dead zone
@@ -149,6 +156,14 @@ export function useAudioRecorder() {
           if (nowActive !== voiceActiveRef.current) {
             voiceActiveRef.current = nowActive;
             setIsVoiceActive(nowActive);
+            if (nowActive) {
+              // Voice started — note the time
+              speechStartTimeRef.current = Date.now();
+            } else if (speechStartTimeRef.current !== null) {
+              // Voice stopped — accumulate duration
+              speechDurationMsRef.current += Date.now() - speechStartTimeRef.current;
+              speechStartTimeRef.current = null;
+            }
           }
 
           if (nowActive) {
@@ -158,8 +173,19 @@ export function useAudioRecorder() {
             if (silenceStartRef.current === null) {
               silenceStartRef.current = Date.now();
             } else if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
-              silenceFiredRef.current    = true;
-              voiceActiveRef.current     = false;
+              // Only fire if enough actual speech was captured — filters noise/coughs
+              const totalSpeech = speechDurationMsRef.current +
+                (speechStartTimeRef.current !== null ? Date.now() - speechStartTimeRef.current : 0);
+              if (totalSpeech < MIN_SPEECH_MS) {
+                // Too short — reset and keep listening
+                speechDetectedRef.current   = false;
+                silenceStartRef.current     = null;
+                speechDurationMsRef.current = 0;
+                speechStartTimeRef.current  = null;
+                return;
+              }
+              silenceFiredRef.current = true;
+              voiceActiveRef.current  = false;
               setIsVoiceActive(false);
               onSilenceRef.current?.();
             }

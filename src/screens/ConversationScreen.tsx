@@ -224,15 +224,22 @@ export default function ConversationScreen({ navigation }: Props) {
       const { text, detectedLanguage } = await transcribe(uri, groqApiKey);
       if (!text) return;
 
+      // Discard very short transcriptions — likely noise artefacts
+      if (text.trim().split(/\s+/).length < 2) return;
+
+      // Discard if detected language doesn't match either briefing language —
+      // Whisper always guesses a language even for noise, so this filters random garbage
+      const myLangCode    = myLang.value.toLowerCase().split('-')[0];
+      const theirLangCode = theirLang.value.toLowerCase().split('-')[0];
+      const detected      = detectedLanguage.toLowerCase().split('-')[0];
+      if (detected !== myLangCode && detected !== theirLangCode) return;
+
       if (isSimilarToSuggestion(text)) {
         lastSuggestionRef.current = null;
         return;
       }
 
-      const myLangCode = myLang.value.toLowerCase().split('-')[0];
-      const detected   = detectedLanguage.toLowerCase().split('-')[0];
-      const speaker    = detectSpeaker(detected, { me: null, them: null }, myLangCode, lastTTSEndTimeRef.current);
-
+      const speaker = detectSpeaker(detected, { me: null, them: null }, myLangCode, lastTTSEndTimeRef.current);
       if (speaker === 'me') return;
 
       await handleTranslateText(text, 'them');
