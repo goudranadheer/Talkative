@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState } from 'react';
 
+// Kept for backward compatibility with ConversationScreen
 export type Language = {
   label: string;
   value: string;
