@@ -34,6 +34,8 @@ type AppContextType = {
   setGroqApiKey: (key: string) => void;
   deepseekApiKey: string;
   setDeepseekApiKey: (key: string) => void;
+  claudeApiKey: string;
+  setClaudeApiKey: (key: string) => void;
   translationMode: TranslationMode;
   setTranslationMode: (mode: TranslationMode) => void;
   ttsEnabled: boolean;
@@ -52,6 +54,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [groqApiKey, setGroqApiKey] = useState('');
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
+  const [claudeApiKey, setClaudeApiKey] = useState('');
   const [translationMode, setTranslationMode] = useState<TranslationMode>('free');
   const [ttsEnabled, setTtsEnabled] = useState(true);
 
@@ -64,6 +67,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       messages, addMessage, clearMessages,
       groqApiKey, setGroqApiKey,
       deepseekApiKey, setDeepseekApiKey,
+      claudeApiKey, setClaudeApiKey,
       translationMode, setTranslationMode,
       ttsEnabled, setTtsEnabled,
     }}>

@@ -30,7 +30,7 @@ type Props = {
 type ActiveSpeaker = 'me' | 'them';
 
 export default function ConversationScreen({ navigation }: Props) {
-  const { briefing, messages, addMessage, clearMessages, groqApiKey, deepseekApiKey, translationMode, ttsEnabled, setTtsEnabled } = useApp();
+  const { briefing, messages, addMessage, clearMessages, groqApiKey, deepseekApiKey, claudeApiKey, translationMode, ttsEnabled, setTtsEnabled } = useApp();
   const [inputText, setInputText] = useState('');
   const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>('them');
   const [loading, setLoading] = useState(false);
@@ -107,6 +107,7 @@ export default function ConversationScreen({ navigation }: Props) {
           history: messages,
           groqApiKey,
           deepseekApiKey: deepseekApiKey || undefined,
+          claudeApiKey: claudeApiKey || undefined,
         });
       } else {
         translated = await translate({
@@ -138,6 +139,7 @@ export default function ConversationScreen({ navigation }: Props) {
           theirLanguage: theirLang.name,
           groqApiKey,
           deepseekApiKey: deepseekApiKey || undefined,
+          claudeApiKey: claudeApiKey || undefined,
         }).then(sugs => setSuggestions(sugs)).catch(() => {});
 
         if (ttsEnabled) {
