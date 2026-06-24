@@ -20,16 +20,27 @@ type Props = {
 };
 
 export default function BriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, groqApiKey, setGroqApiKey, deepseekApiKey, setDeepseekApiKey, translationMode, setTranslationMode, clearMessages } = useApp();
+  const { briefing, setBriefing, groqApiKey, setGroqApiKey, deepseekApiKey, setDeepseekApiKey, claudeApiKey, setClaudeApiKey, translationMode, setTranslationMode, clearMessages } = useApp();
   const [myLanguage, setMyLanguage] = useState<Language | null>(briefing.myLanguage);
   const [theirLanguage, setTheirLanguage] = useState<Language | null>(briefing.theirLanguage);
   const [context, setContext] = useState(briefing.context);
   const [mode, setMode] = useState<'brief' | 'detailed'>(briefing.mode);
   const [localGroqKey, setLocalGroqKey] = useState(groqApiKey);
   const [localDeepseekKey, setLocalDeepseekKey] = useState(deepseekApiKey);
+  const [localClaudeKey, setLocalClaudeKey] = useState(claudeApiKey);
   const [pickerTarget, setPickerTarget] = useState<'mine' | 'theirs' | null>(null);
 
-  const hasLLMKey = localGroqKey.trim().length > 0 || localDeepseekKey.trim().length > 0;
+  const hasLLMKey =
+    localGroqKey.trim().length > 0 ||
+    localDeepseekKey.trim().length > 0 ||
+    localClaudeKey.trim().length > 0;
+
+  // Provider precedence for AI mode: Claude > DeepSeek > Groq.
+  const aiProviderLabel = localClaudeKey.trim()
+    ? 'Claude Haiku 4.5'
+    : localDeepseekKey.trim()
+    ? 'DeepSeek V4'
+    : 'Groq Llama';
   const canStart =
     myLanguage &&
     theirLanguage &&
@@ -42,6 +53,7 @@ export default function BriefingScreen({ navigation }: Props) {
     setBriefing({ myLanguage, theirLanguage, context, mode });
     setGroqApiKey(localGroqKey.trim());
     setDeepseekApiKey(localDeepseekKey.trim());
+    setClaudeApiKey(localClaudeKey.trim());
     if (mode === 'detailed') {
       navigation.navigate('DetailedBriefing' as any);
     } else {
@@ -145,7 +157,7 @@ export default function BriefingScreen({ navigation }: Props) {
               AI
             </Text>
             <Text style={[styles.modeBtnSub, translationMode === 'reasoning' && styles.modeBtnSubActive]}>
-              {localDeepseekKey ? 'DeepSeek V4' : 'Groq Llama'} · Context-aware
+              {aiProviderLabel} · Context-aware
             </Text>
           </TouchableOpacity>
         </View>
@@ -163,6 +175,21 @@ export default function BriefingScreen({ navigation }: Props) {
           autoCapitalize="none"
           value={localGroqKey}
           onChangeText={setLocalGroqKey}
+        />
+
+        {/* Claude key — best AI quality; takes priority over DeepSeek/Groq */}
+        <Text style={styles.label}>
+          Claude API Key{' '}
+          <Text style={styles.optional}>(console.anthropic.com — best translation & suggestions)</Text>
+        </Text>
+        <TextInput
+          style={styles.input}
+          placeholder="sk-ant-... (optional — Claude Haiku 4.5, fast + highest quality)"
+          placeholderTextColor="#999"
+          secureTextEntry
+          autoCapitalize="none"
+          value={localClaudeKey}
+          onChangeText={setLocalClaudeKey}
         />
 
         {/* DeepSeek key — upgrades LLM from Groq Llama to DeepSeek V4 */}

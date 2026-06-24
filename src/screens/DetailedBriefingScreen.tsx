@@ -12,7 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { callDeepSeek } from '../services/reasoning';
+import { callDeepSeek, callClaude } from '../services/reasoning';
 import Groq from 'groq-sdk';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -27,7 +27,7 @@ type ChatMessage = {
 };
 
 export default function DetailedBriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, groqApiKey, deepseekApiKey } = useApp();
+  const { briefing, setBriefing, groqApiKey, deepseekApiKey, claudeApiKey } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -56,7 +56,9 @@ Rules:
           { role: 'user' as const, content: 'Start the interview.' },
         ];
         let content: string;
-        if (deepseekApiKey) {
+        if (claudeApiKey) {
+          content = await callClaude(chatMessages, { max_tokens: 300, temperature: 0.7 }, claudeApiKey);
+        } else if (deepseekApiKey) {
           content = await callDeepSeek(chatMessages, { max_tokens: 300 }, deepseekApiKey);
         } else {
           const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
@@ -88,7 +90,9 @@ Rules:
         ...newMessages,
       ];
       let aiContent: string;
-      if (deepseekApiKey) {
+      if (claudeApiKey) {
+        aiContent = await callClaude(chatMessages, { max_tokens: 400, temperature: 0.7 }, claudeApiKey);
+      } else if (deepseekApiKey) {
         aiContent = await callDeepSeek(chatMessages, { max_tokens: 400, temperature: 0.7 }, deepseekApiKey);
       } else {
         const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
