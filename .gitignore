@@ -39,3 +39,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# env (Supabase URL + anon key)
+.env
+.supabase-db-password

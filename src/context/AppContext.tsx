@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { Session } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
 
 export type Language = {
   label: string;
@@ -22,7 +24,10 @@ export type Message = {
   timestamp: Date;
 };
 
-export type TranslationMode = 'free' | 'reasoning';
+export type Profile = {
+  quotaUnits: number;
+  usedUnits: number;
+};
 
 type AppContextType = {
   briefing: BriefingConfig;
@@ -30,16 +35,13 @@ type AppContextType = {
   messages: Message[];
   addMessage: (m: Message) => void;
   clearMessages: () => void;
-  groqApiKey: string;
-  setGroqApiKey: (key: string) => void;
-  deepseekApiKey: string;
-  setDeepseekApiKey: (key: string) => void;
-  claudeApiKey: string;
-  setClaudeApiKey: (key: string) => void;
-  translationMode: TranslationMode;
-  setTranslationMode: (mode: TranslationMode) => void;
   ttsEnabled: boolean;
   setTtsEnabled: (v: boolean) => void;
+  session: Session | null;
+  sessionLoading: boolean;
+  profile: Profile | null;
+  refreshProfile: () => Promise<void>;
+  signOut: () => Promise<void>;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -52,11 +54,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     mode: 'brief',
   });
   const [messages, setMessages] = useState<Message[]>([]);
-  const [groqApiKey, setGroqApiKey] = useState('');
-  const [deepseekApiKey, setDeepseekApiKey] = useState('');
-  const [claudeApiKey, setClaudeApiKey] = useState('');
-  const [translationMode, setTranslationMode] = useState<TranslationMode>('free');
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [session, setSession] = useState<Session | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [profile, setProfile] = useState<Profile | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setSessionLoading(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  async function refreshProfile() {
+    const { data } = await supabase
+      .from('profiles')
+      .select('quota_units, used_units')
+      .single();
+    if (data) {
+      setProfile({ quotaUnits: data.quota_units, usedUnits: data.used_units });
+    }
+  }
+
+  useEffect(() => {
+    if (session) refreshProfile();
+    else setProfile(null);
+  }, [session?.user.id]);
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setMessages([]);
+  }
 
   const addMessage = (m: Message) => setMessages(prev => [...prev, m]);
   const clearMessages = () => setMessages([]);
@@ -65,11 +97,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider value={{
       briefing, setBriefing,
       messages, addMessage, clearMessages,
-      groqApiKey, setGroqApiKey,
-      deepseekApiKey, setDeepseekApiKey,
-      claudeApiKey, setClaudeApiKey,
-      translationMode, setTranslationMode,
       ttsEnabled, setTtsEnabled,
+      session, sessionLoading,
+      profile, refreshProfile,
+      signOut,
     }}>
       {children}
     </AppContext.Provider>

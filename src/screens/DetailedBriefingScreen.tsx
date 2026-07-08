@@ -12,8 +12,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { callDeepSeek, callClaude } from '../services/reasoning';
-import Groq from 'groq-sdk';
+import { aiCoach, ApiError } from '../services/api';
+import { colors, hudLabel, radii, glow } from '../constants/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 
@@ -26,48 +26,34 @@ type ChatMessage = {
   content: string;
 };
 
+const FALLBACK_OPENER =
+  'Tell me — who are you meeting and what do you need to achieve from this conversation?';
+
 export default function DetailedBriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, groqApiKey, deepseekApiKey, claudeApiKey } = useApp();
+  const { briefing, setBriefing } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const flatListRef = useRef<FlatList>(null);
 
-  const systemPrompt = `You are a sharp, experienced conversation coach preparing a ${briefing.myLanguage?.name} speaker for a live conversation with a ${briefing.theirLanguage?.name} speaker.
-
-Your role across this interview:
-1. Understand the user's goal and the full context of the meeting.
-2. Identify the most likely questions, objections, or scenarios the ${briefing.theirLanguage?.name} speaker will raise.
-3. Drill the user with specific "What if they say..." challenges to surface any weak points.
-4. Extract key details: names, numbers, constraints, non-negotiables.
-5. After 4-6 focused exchanges, once you have a complete picture, summarise the strategy clearly and end your message with exactly: "You are ready. Tap Ready to begin."
-
-Rules:
-- Ask only ONE focused question per message — never multiple at once.
-- Always respond in ${briefing.myLanguage?.name}.
-- Be direct and efficient. This is pre-game preparation, not a therapy session.`;
+  const coachParams = {
+    myLanguage: briefing.myLanguage?.name ?? 'English',
+    theirLanguage: briefing.theirLanguage?.name ?? 'English',
+  };
 
   useEffect(() => {
     const startInterview = async () => {
       setLoading(true);
       try {
-        const chatMessages = [
-          { role: 'system' as const, content: systemPrompt },
-          { role: 'user' as const, content: 'Start the interview.' },
-        ];
-        let content: string;
-        if (claudeApiKey) {
-          content = await callClaude(chatMessages, { max_tokens: 300, temperature: 0.7 }, claudeApiKey);
-        } else if (deepseekApiKey) {
-          content = await callDeepSeek(chatMessages, { max_tokens: 300 }, deepseekApiKey);
-        } else {
-          const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
-          const response = await client.chat.completions.create({ model: 'llama-3.3-70b-versatile', messages: chatMessages, max_tokens: 300 });
-          content = response.choices[0]?.message?.content ?? '';
-        }
-        setMessages([{ role: 'assistant', content: content || "Tell me — who are you meeting and what do you need to achieve from this conversation?" }]);
+        const content = await aiCoach({
+          ...coachParams,
+          messages: [{ role: 'user', content: 'Start the interview.' }],
+        });
+        setMessages([{ role: 'assistant', content: content || FALLBACK_OPENER }]);
       } catch (e) {
-        setMessages([{ role: 'assistant', content: "Tell me — who are you meeting and what do you need to achieve from this conversation?" }]);
+        if (e instanceof ApiError && e.code === 'quota_exhausted') setError(e.message);
+        setMessages([{ role: 'assistant', content: FALLBACK_OPENER }]);
       } finally {
         setLoading(false);
       }
@@ -80,28 +66,16 @@ Rules:
 
     const userMsg = input.trim();
     setInput('');
+    setError('');
     const newMessages: ChatMessage[] = [...messages, { role: 'user', content: userMsg }];
     setMessages(newMessages);
     setLoading(true);
 
     try {
-      const chatMessages = [
-        { role: 'system' as const, content: systemPrompt },
-        ...newMessages,
-      ];
-      let aiContent: string;
-      if (claudeApiKey) {
-        aiContent = await callClaude(chatMessages, { max_tokens: 400, temperature: 0.7 }, claudeApiKey);
-      } else if (deepseekApiKey) {
-        aiContent = await callDeepSeek(chatMessages, { max_tokens: 400, temperature: 0.7 }, deepseekApiKey);
-      } else {
-        const client = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
-        const response = await client.chat.completions.create({ model: 'llama-3.3-70b-versatile', messages: chatMessages, max_tokens: 400 });
-        aiContent = response.choices[0]?.message?.content ?? '';
-      }
+      const aiContent = await aiCoach({ ...coachParams, messages: newMessages });
       setMessages([...newMessages, { role: 'assistant', content: aiContent }]);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      setError(e?.message ?? 'The coach is unreachable. Try again.');
     } finally {
       setLoading(false);
     }
@@ -122,9 +96,12 @@ Rules:
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Deep Briefing</Text>
+          <View>
+            <Text style={styles.headerTitle}>DEEP BRIEFING</Text>
+            <Text style={styles.headerSub}>AI STRATEGY COACH</Text>
+          </View>
           <TouchableOpacity onPress={handleFinish} style={styles.finishBtn}>
-            <Text style={styles.finishText}>Ready</Text>
+            <Text style={styles.finishText}>READY ➜</Text>
           </TouchableOpacity>
         </View>
 
@@ -136,6 +113,7 @@ Rules:
             onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
             renderItem={({ item }) => (
               <View style={[styles.msg, item.role === 'user' ? styles.userMsg : styles.aiMsg]}>
+                {item.role === 'assistant' && <Text style={styles.coachTag}>COACH</Text>}
                 <Text style={styles.msgText}>{item.content}</Text>
               </View>
             )}
@@ -143,13 +121,14 @@ Rules:
           />
         </View>
 
-        {loading && <ActivityIndicator style={{ marginBottom: 10 }} color="#6c63ff" />}
+        {loading && <ActivityIndicator style={{ marginBottom: 10 }} color={colors.primary} />}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={styles.inputArea}>
           <TextInput
             style={styles.input}
             placeholder="Type your answer..."
-            placeholderTextColor="#666"
+            placeholderTextColor={colors.textFaint}
             value={input}
             onChangeText={setInput}
             multiline
@@ -164,24 +143,64 @@ Rules:
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0f0f1a' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#222' },
-  headerTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  finishBtn: { backgroundColor: '#6c63ff', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
-  finishText: { color: '#fff', fontWeight: '700' },
-  msg: { maxWidth: '85%', padding: 12, borderRadius: 16, marginBottom: 12 },
-  aiMsg: { alignSelf: 'flex-start', backgroundColor: '#1e1e2e' },
-  userMsg: { alignSelf: 'flex-end', backgroundColor: '#6c63ff' },
-  msgText: { color: '#fff', fontSize: 15 },
+  safe: { flex: 1, backgroundColor: colors.bg },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.bgElevated,
+  },
+  headerTitle: { color: colors.text, fontSize: 16, fontWeight: '800', letterSpacing: 3 },
+  headerSub: { ...hudLabel, color: colors.primary, fontSize: 9, marginTop: 3 },
+  finishBtn: {
+    backgroundColor: colors.primaryDim,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    ...glow,
+    shadowOpacity: 0.3,
+  },
+  finishText: { color: colors.primary, fontWeight: '800', fontSize: 12, letterSpacing: 1.5 },
+  msg: { maxWidth: '85%', padding: 14, borderRadius: radii.md, marginBottom: 12, borderWidth: 1 },
+  aiMsg: { alignSelf: 'flex-start', backgroundColor: colors.surface, borderColor: colors.border },
+  userMsg: { alignSelf: 'flex-end', backgroundColor: colors.accentDim, borderColor: colors.accent },
+  coachTag: { ...hudLabel, fontSize: 9, color: colors.primary, marginBottom: 6 },
+  msgText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  error: { color: colors.danger, fontSize: 13, textAlign: 'center', marginBottom: 8, marginHorizontal: 16 },
   inputArea: {
     flexDirection: 'row',
     padding: 16,
     alignItems: 'center',
-    backgroundColor: '#161625',
+    backgroundColor: colors.bgElevated,
     borderTopWidth: 1,
-    borderTopColor: '#222',
+    borderTopColor: colors.border,
   },
-  input: { flex: 1, backgroundColor: '#1e1e2e', color: '#fff', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, maxHeight: 100 },
-  sendBtn: { marginLeft: 12, backgroundColor: '#6c63ff', width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  sendIcon: { color: '#fff', fontSize: 20, fontWeight: '700' },
+  input: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    color: colors.text,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    marginLeft: 12,
+    backgroundColor: colors.primary,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...glow,
+    shadowOpacity: 0.4,
+  },
+  sendIcon: { color: '#03121A', fontSize: 20, fontWeight: '800' },
 });

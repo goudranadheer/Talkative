@@ -1,0 +1,7 @@
+project_id = "talkative"
+
+[functions.transcribe]
+verify_jwt = true
+
+[functions.ai]
+verify_jwt = true

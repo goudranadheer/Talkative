@@ -1,18 +1,7 @@
-import { transcribe } from './stt';
-
 export type EnrolledSpeaker = {
   label: 'me' | 'them';
   detectedLanguage: string; // e.g. 'en', 'hi', 'de'
 };
-
-export async function enrollSpeaker(
-  audioUri: string,
-  groqApiKey: string,
-  label: 'me' | 'them',
-): Promise<EnrolledSpeaker> {
-  const { detectedLanguage } = await transcribe(audioUri, groqApiKey);
-  return { label, detectedLanguage };
-}
 
 // Multi-signal speaker detection.
 // Priority order:

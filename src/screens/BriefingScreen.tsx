@@ -10,8 +10,11 @@ import {
   FlatList,
   SafeAreaView,
 } from 'react-native';
-import { useApp, Language, TranslationMode } from '../context/AppContext';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useApp, Language } from '../context/AppContext';
 import { LANGUAGES } from '../constants/languages';
+import GradientButton from '../components/GradientButton';
+import { colors, hudLabel, radii, glow } from '../constants/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 
@@ -20,42 +23,27 @@ type Props = {
 };
 
 export default function BriefingScreen({ navigation }: Props) {
-  const { briefing, setBriefing, groqApiKey, setGroqApiKey, deepseekApiKey, setDeepseekApiKey, claudeApiKey, setClaudeApiKey, translationMode, setTranslationMode, clearMessages } = useApp();
+  const { briefing, setBriefing, clearMessages, profile, session, signOut } = useApp();
   const [myLanguage, setMyLanguage] = useState<Language | null>(briefing.myLanguage);
   const [theirLanguage, setTheirLanguage] = useState<Language | null>(briefing.theirLanguage);
   const [context, setContext] = useState(briefing.context);
   const [mode, setMode] = useState<'brief' | 'detailed'>(briefing.mode);
-  const [localGroqKey, setLocalGroqKey] = useState(groqApiKey);
-  const [localDeepseekKey, setLocalDeepseekKey] = useState(deepseekApiKey);
-  const [localClaudeKey, setLocalClaudeKey] = useState(claudeApiKey);
   const [pickerTarget, setPickerTarget] = useState<'mine' | 'theirs' | null>(null);
 
-  const hasLLMKey =
-    localGroqKey.trim().length > 0 ||
-    localDeepseekKey.trim().length > 0 ||
-    localClaudeKey.trim().length > 0;
+  const remaining = profile ? Math.max(profile.quotaUnits - profile.usedUnits, 0) : null;
+  const quotaPct = profile ? Math.max(0, Math.min(1, 1 - profile.usedUnits / profile.quotaUnits)) : 1;
 
-  // Provider precedence for AI mode: Claude > DeepSeek > Groq.
-  const aiProviderLabel = localClaudeKey.trim()
-    ? 'Claude Haiku 4.5'
-    : localDeepseekKey.trim()
-    ? 'DeepSeek V4'
-    : 'Groq Llama';
   const canStart =
-    myLanguage &&
-    theirLanguage &&
+    !!myLanguage &&
+    !!theirLanguage &&
     myLanguage.value !== theirLanguage.value &&
-    (translationMode === 'free' || hasLLMKey) &&
     (mode === 'detailed' || context.trim().length > 0);
 
   function handleStart() {
     clearMessages(); // always start fresh when tapping Start Conversation
     setBriefing({ myLanguage, theirLanguage, context, mode });
-    setGroqApiKey(localGroqKey.trim());
-    setDeepseekApiKey(localDeepseekKey.trim());
-    setClaudeApiKey(localClaudeKey.trim());
     if (mode === 'detailed') {
-      navigation.navigate('DetailedBriefing' as any);
+      navigation.navigate('DetailedBriefing');
     } else {
       navigation.navigate('Conversation');
     }
@@ -69,23 +57,57 @@ export default function BriefingScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <LinearGradient
+        colors={['rgba(0,229,255,0.10)', 'transparent']}
+        style={styles.topGlow}
+      />
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>Talkative</Text>
-        <Text style={styles.subtitle}>Set up your conversation</Text>
+        {/* Header: brand + account */}
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.title}>TALKATIVE</Text>
+            <Text style={styles.subtitle}>MISSION SETUP</Text>
+          </View>
+          <TouchableOpacity onPress={signOut} style={styles.signOutBtn}>
+            <Text style={styles.signOutText}>SIGN OUT</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Quota HUD */}
+        <View style={styles.quotaCard}>
+          <View style={styles.quotaTopRow}>
+            <Text style={hudLabel}>Free utterances left</Text>
+            <Text style={styles.quotaValue}>
+              {remaining !== null ? remaining : '—'}
+              {profile ? <Text style={styles.quotaTotal}> / {profile.quotaUnits}</Text> : null}
+            </Text>
+          </View>
+          <View style={styles.quotaTrack}>
+            <LinearGradient
+              colors={['#00E5FF', '#7C4DFF']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={[styles.quotaFill, { width: `${quotaPct * 100}%` }]}
+            />
+          </View>
+          <Text style={styles.quotaEmail}>{session?.user.email}</Text>
+        </View>
 
         {/* Language pickers */}
-        <Text style={styles.label}>Your language</Text>
+        <Text style={styles.label}>YOUR LANGUAGE</Text>
         <TouchableOpacity style={styles.picker} onPress={() => setPickerTarget('mine')}>
           <Text style={myLanguage ? styles.pickerText : styles.pickerPlaceholder}>
             {myLanguage ? myLanguage.label : 'Select your language'}
           </Text>
+          <Text style={styles.pickerChevron}>▾</Text>
         </TouchableOpacity>
 
-        <Text style={styles.label}>Their language</Text>
+        <Text style={styles.label}>THEIR LANGUAGE</Text>
         <TouchableOpacity style={styles.picker} onPress={() => setPickerTarget('theirs')}>
           <Text style={theirLanguage ? styles.pickerText : styles.pickerPlaceholder}>
             {theirLanguage ? theirLanguage.label : "Select their language"}
           </Text>
+          <Text style={styles.pickerChevron}>▾</Text>
         </TouchableOpacity>
 
         {myLanguage && theirLanguage && myLanguage.value === theirLanguage.value && (
@@ -93,14 +115,14 @@ export default function BriefingScreen({ navigation }: Props) {
         )}
 
         {/* Briefing Mode Selection */}
-        <Text style={styles.label}>Briefing Mode</Text>
+        <Text style={styles.label}>BRIEFING MODE</Text>
         <View style={styles.modeToggle}>
           <TouchableOpacity
             style={[styles.modeBtn, mode === 'brief' && styles.modeBtnActive]}
             onPress={() => setMode('brief')}
           >
             <Text style={[styles.modeBtnText, mode === 'brief' && styles.modeBtnTextActive]}>
-              Brief
+              BRIEF
             </Text>
             <Text style={[styles.modeBtnSub, mode === 'brief' && styles.modeBtnSubActive]}>
               Quick summary
@@ -111,10 +133,10 @@ export default function BriefingScreen({ navigation }: Props) {
             onPress={() => setMode('detailed')}
           >
             <Text style={[styles.modeBtnText, mode === 'detailed' && styles.modeBtnTextActive]}>
-              Detailed
+              DETAILED
             </Text>
             <Text style={[styles.modeBtnSub, mode === 'detailed' && styles.modeBtnSubActive]}>
-              To-and-fro interview
+              AI coach interview
             </Text>
           </TouchableOpacity>
         </View>
@@ -122,11 +144,11 @@ export default function BriefingScreen({ navigation }: Props) {
         {/* Context - Only show if mode is brief */}
         {mode === 'brief' && (
           <>
-            <Text style={styles.label}>Your goal</Text>
+            <Text style={styles.label}>YOUR GOAL</Text>
             <TextInput
               style={[styles.input, styles.textArea]}
               placeholder="e.g. I'm in a job interview and want to negotiate a salary of at least €50,000. I have 5 years of experience."
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.textFaint}
               multiline
               numberOfLines={3}
               value={context}
@@ -135,85 +157,12 @@ export default function BriefingScreen({ navigation }: Props) {
           </>
         )}
 
-        {/* Translation mode toggle */}
-        <Text style={styles.label}>Translation mode</Text>
-        <View style={styles.modeToggle}>
-          <TouchableOpacity
-            style={[styles.modeBtn, translationMode === 'free' && styles.modeBtnActive]}
-            onPress={() => setTranslationMode('free')}
-          >
-            <Text style={[styles.modeBtnText, translationMode === 'free' && styles.modeBtnTextActive]}>
-              Free
-            </Text>
-            <Text style={[styles.modeBtnSub, translationMode === 'free' && styles.modeBtnSubActive]}>
-              MyMemory · No key needed
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.modeBtn, translationMode === 'reasoning' && styles.modeBtnActive]}
-            onPress={() => setTranslationMode('reasoning')}
-          >
-            <Text style={[styles.modeBtnText, translationMode === 'reasoning' && styles.modeBtnTextActive]}>
-              AI
-            </Text>
-            <Text style={[styles.modeBtnSub, translationMode === 'reasoning' && styles.modeBtnSubActive]}>
-              {aiProviderLabel} · Context-aware
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Groq key — unlocks mic (Whisper STT) */}
-        <Text style={styles.label}>
-          Groq API Key{' '}
-          <Text style={styles.optional}>(free at console.groq.com — unlocks mic)</Text>
-        </Text>
-        <TextInput
-          style={styles.input}
-          placeholder="gsk_... (optional — text input works without it)"
-          placeholderTextColor="#999"
-          secureTextEntry
-          autoCapitalize="none"
-          value={localGroqKey}
-          onChangeText={setLocalGroqKey}
-        />
-
-        {/* Claude key — best AI quality; takes priority over DeepSeek/Groq */}
-        <Text style={styles.label}>
-          Claude API Key{' '}
-          <Text style={styles.optional}>(console.anthropic.com — best translation & suggestions)</Text>
-        </Text>
-        <TextInput
-          style={styles.input}
-          placeholder="sk-ant-... (optional — Claude Haiku 4.5, fast + highest quality)"
-          placeholderTextColor="#999"
-          secureTextEntry
-          autoCapitalize="none"
-          value={localClaudeKey}
-          onChangeText={setLocalClaudeKey}
-        />
-
-        {/* DeepSeek key — upgrades LLM from Groq Llama to DeepSeek V4 */}
-        <Text style={styles.label}>
-          DeepSeek API Key{' '}
-          <Text style={styles.optional}>(platform.deepseek.com — better AI suggestions)</Text>
-        </Text>
-        <TextInput
-          style={styles.input}
-          placeholder="sk-... (optional — falls back to Groq LLM)"
-          placeholderTextColor="#999"
-          secureTextEntry
-          autoCapitalize="none"
-          value={localDeepseekKey}
-          onChangeText={setLocalDeepseekKey}
-        />
-
-        <TouchableOpacity
-          style={[styles.startButton, !canStart && styles.startButtonDisabled]}
+        <GradientButton
+          title="Start Conversation"
           onPress={handleStart}
           disabled={!canStart}
-        >
-          <Text style={styles.startButtonText}>Start Conversation</Text>
-        </TouchableOpacity>
+          style={{ marginTop: 36 }}
+        />
       </ScrollView>
 
       {/* Language picker modal */}
@@ -221,7 +170,7 @@ export default function BriefingScreen({ navigation }: Props) {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>
-              {pickerTarget === 'mine' ? 'Your language' : 'Their language'}
+              {pickerTarget === 'mine' ? 'YOUR LANGUAGE' : 'THEIR LANGUAGE'}
             </Text>
             <FlatList
               data={LANGUAGES}
@@ -243,67 +192,105 @@ export default function BriefingScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0f0f1a' },
+  safe: { flex: 1, backgroundColor: colors.bg },
+  topGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 220 },
   container: { padding: 24, paddingBottom: 48 },
-  title: { fontSize: 32, fontWeight: '800', color: '#fff', marginBottom: 4 },
-  subtitle: { fontSize: 16, color: '#888', marginBottom: 32 },
-  label: { fontSize: 14, fontWeight: '600', color: '#bbb', marginBottom: 8, marginTop: 16 },
-  optional: { fontWeight: '400', color: '#666' },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 24,
+  },
+  title: { fontSize: 28, fontWeight: '900', color: colors.text, letterSpacing: 6 },
+  subtitle: { ...hudLabel, color: colors.primary, marginTop: 6 },
+  signOutBtn: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  signOutText: { color: colors.textDim, fontSize: 10, fontWeight: '700', letterSpacing: 1.5 },
+  quotaCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    marginBottom: 8,
+    ...glow,
+    shadowOpacity: 0.10,
+  },
+  quotaTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  quotaValue: { color: colors.primary, fontSize: 20, fontWeight: '800' },
+  quotaTotal: { color: colors.textFaint, fontSize: 13, fontWeight: '600' },
+  quotaTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.bgElevated,
+    marginTop: 12,
+    overflow: 'hidden',
+  },
+  quotaFill: { height: 6, borderRadius: 3 },
+  quotaEmail: { color: colors.textFaint, fontSize: 11, marginTop: 10 },
+  label: { ...hudLabel, marginBottom: 8, marginTop: 20 },
   picker: {
-    backgroundColor: '#1e1e2e',
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: colors.border,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  pickerText: { color: '#fff', fontSize: 16 },
-  pickerPlaceholder: { color: '#555', fontSize: 16 },
+  pickerText: { color: colors.text, fontSize: 16, fontWeight: '600' },
+  pickerPlaceholder: { color: colors.textFaint, fontSize: 16 },
+  pickerChevron: { color: colors.primary, fontSize: 14 },
   input: {
-    backgroundColor: '#1e1e2e',
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
     padding: 16,
-    color: '#fff',
+    color: colors.text,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: colors.border,
   },
   textArea: { height: 90, textAlignVertical: 'top' },
-  error: { color: '#ff6b6b', fontSize: 13, marginTop: 6 },
+  error: { color: colors.danger, fontSize: 13, marginTop: 6 },
   modeToggle: { flexDirection: 'row', gap: 10 },
   modeBtn: {
     flex: 1,
-    backgroundColor: '#1e1e2e',
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: colors.border,
     alignItems: 'center',
   },
-  modeBtnActive: { backgroundColor: '#1a1a3e', borderColor: '#6c63ff' },
-  modeBtnText: { color: '#666', fontSize: 15, fontWeight: '700' },
-  modeBtnTextActive: { color: '#fff' },
-  modeBtnSub: { color: '#444', fontSize: 11, marginTop: 4, textAlign: 'center' },
-  modeBtnSubActive: { color: '#6c63ff' },
-  startButton: {
-    backgroundColor: '#6c63ff',
-    borderRadius: 14,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 36,
+  modeBtnActive: {
+    backgroundColor: colors.surfaceHi,
+    borderColor: colors.primary,
+    ...glow,
+    shadowOpacity: 0.25,
   },
-  startButtonDisabled: { backgroundColor: '#3a3a5c', opacity: 0.6 },
-  startButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  modeBtnText: { color: colors.textFaint, fontSize: 14, fontWeight: '800', letterSpacing: 1.5 },
+  modeBtnTextActive: { color: colors.text },
+  modeBtnSub: { color: colors.textFaint, fontSize: 11, marginTop: 4, textAlign: 'center' },
+  modeBtnSubActive: { color: colors.primary },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(2,4,12,0.75)', justifyContent: 'flex-end' },
   modalContent: {
-    backgroundColor: '#1e1e2e',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: colors.bgElevated,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
     padding: 20,
     maxHeight: '70%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: '#fff', marginBottom: 16 },
-  langItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#2a2a3e' },
-  langItemText: { fontSize: 16, color: '#fff' },
+  modalTitle: { ...hudLabel, color: colors.primary, marginBottom: 16 },
+  langItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
+  langItemText: { fontSize: 16, color: colors.text },
   cancelButton: { marginTop: 16, alignItems: 'center', padding: 14 },
-  cancelButtonText: { color: '#6c63ff', fontSize: 16, fontWeight: '600' },
+  cancelButtonText: { color: colors.primary, fontSize: 16, fontWeight: '600' },
 });
