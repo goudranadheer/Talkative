@@ -43,3 +43,4 @@ yarn-error.*
 # env (Supabase URL + anon key)
 .env
 .supabase-db-password
+supabase/.temp/
