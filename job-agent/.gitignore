@@ -1,0 +1,7 @@
+.env
+data/*.db
+data/profile.yaml
+data/applications/
+__pycache__/
+*.pyc
+.venv/
