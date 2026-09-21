@@ -9,7 +9,7 @@ description = "Personal job application agent: find, score, tailor for, and semi
 requires-python = ">=3.10"
 
 [project.scripts]
-jobagent = "jobagent.cli:main"
+jobagent = "jobagent.cli:run"
 
 [tool.setuptools]
 packages = ["jobagent", "jobagent.sources", "jobagent.autofill"]

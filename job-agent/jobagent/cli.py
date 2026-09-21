@@ -3,7 +3,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from . import db, matcher, tailor, tracker
+from . import db, llm, matcher, tailor, tracker
 from .profile import Profile, load_profile, save_profile
 from .sources import ALL_SOURCES
 
@@ -183,5 +183,19 @@ def _split(raw: str) -> list:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def run():
+    """Entry point used by the `jobagent` console script and `python -m jobagent`.
+
+    Centralizes error handling so expected failures (missing profile, missing
+    API key, unknown job id) print a clean one-line message instead of a
+    full Python traceback.
+    """
+    try:
+        main()
+    except (FileNotFoundError, ValueError, llm.LLMError) as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
-    main()
+    run()
