@@ -1,9 +1,10 @@
 # jobagent
 
-A personal job-application CLI agent. It searches public job boards, scores
-listings against your resume with an LLM, generates a tailored resume +
-cover letter per job, tracks your application pipeline, and can open a real
-browser to autofill an application form for you to review and submit.
+A personal job-application agent, usable as a CLI or a local web dashboard.
+It searches public job boards, scores listings against your resume with an
+LLM, generates a tailored resume + cover letter per job, tracks your
+application pipeline, and can open a real browser to autofill an
+application form for you to review and submit.
 
 **It never submits an application on its own.** The `apply` command fills in
 what it can recognize (name, email, phone, resume/cover-letter upload, etc.)
@@ -33,7 +34,26 @@ pip install -e .
 
 Without installing, you can always run commands as `python -m jobagent <command>`.
 
-## Usage
+## Web dashboard
+
+A dark, real-time dashboard covering the same functionality as the CLI:
+profile setup, search, AI match scoring, a job board grid, tailored
+resume/cover-letter preview, and pipeline stats.
+
+```bash
+uvicorn web.server:app --reload --port 8420
+```
+
+Then open http://127.0.0.1:8420 in your browser. It runs entirely on your
+machine against the same `data/` folder and `.env` as the CLI -- use
+whichever interface you prefer, or both interchangeably.
+
+The "Open & Autofill Application" button launches the same Playwright
+browser automation as `jobagent apply`: it opens a real, visible browser on
+this machine, fills what it recognizes, and leaves the browser open for you
+to review and submit yourself -- the web UI does not change that behavior.
+
+## CLI usage
 
 ```bash
 jobagent init          # interactive: name, resume path, target roles, keywords, etc.

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>JOBAGENT // Career Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<canvas id="bg-canvas"></canvas>
+<div class="scanlines"></div>
+
+<div id="toasts" class="toasts"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">JA</div>
+    <div class="brand-text">
+      <h1>JOBAGENT</h1>
+      <span class="tagline">autonomous career operations</span>
+    </div>
+  </div>
+  <div class="topbar-status">
+    <div class="status-chip" id="profile-chip">
+      <span class="dot"></span>
+      <span id="profile-chip-text">no profile loaded</span>
+    </div>
+    <button class="btn btn-ghost" id="btn-edit-profile">Profile</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- Left: pipeline stats -->
+  <aside class="panel panel-stats">
+    <h2 class="panel-title">Pipeline</h2>
+    <div id="stats-grid" class="stats-grid"></div>
+    <h3 class="panel-subtitle">Follow-ups due</h3>
+    <div id="followups" class="followup-list">
+      <p class="muted">Nothing overdue.</p>
+    </div>
+  </aside>
+
+  <!-- Center: search + jobs -->
+  <section class="panel panel-main">
+    <div class="controls">
+      <div class="control-row">
+        <input id="search-query" type="text" placeholder="Search keywords (e.g. senior backend engineer)" />
+        <input id="search-location" type="text" placeholder="Location (e.g. remote)" style="max-width:180px" />
+        <button class="btn btn-primary" id="btn-search">
+          <span class="btn-glow"></span>Search
+        </button>
+      </div>
+      <div class="control-row">
+        <label class="slider-label">Min match score
+          <input id="match-min-score" type="range" min="0" max="100" value="60" />
+          <span id="match-min-score-val" class="mono">60</span>
+        </label>
+        <button class="btn btn-secondary" id="btn-match">
+          <span class="btn-glow"></span>Score with AI
+        </button>
+      </div>
+    </div>
+
+    <div class="tabs" id="status-tabs">
+      <button class="tab active" data-status="">All</button>
+      <button class="tab" data-status="new">New</button>
+      <button class="tab" data-status="matched">Matched</button>
+      <button class="tab" data-status="tailored">Tailored</button>
+      <button class="tab" data-status="applied">Applied</button>
+      <button class="tab" data-status="interviewing">Interviewing</button>
+      <button class="tab" data-status="offer">Offer</button>
+      <button class="tab" data-status="rejected">Rejected</button>
+      <button class="tab" data-status="ignored">Ignored</button>
+    </div>
+
+    <div id="job-grid" class="job-grid">
+      <p class="muted empty-state">No jobs yet. Set up your profile, then hit Search.</p>
+    </div>
+  </section>
+</main>
+
+<!-- Profile modal -->
+<div class="modal-backdrop" id="profile-modal">
+  <div class="modal glass">
+    <div class="modal-header">
+      <h2>Candidate Profile</h2>
+      <button class="btn-close" data-close="profile-modal">&times;</button>
+    </div>
+    <form id="profile-form" class="form-grid">
+      <label>Full name <input name="name" required /></label>
+      <label>Email <input name="email" type="email" required /></label>
+      <label>Phone <input name="phone" /></label>
+      <label>LinkedIn URL <input name="linkedin" /></label>
+      <label>Website / portfolio <input name="website" /></label>
+      <label>Location <input name="location" /></label>
+      <label class="full">Resume file
+        <input type="file" id="resume-file" accept=".pdf,.docx,.txt,.md" />
+        <span id="resume-path-display" class="muted mono small"></span>
+      </label>
+      <label class="full">Target titles (comma-separated) <input name="target_titles" /></label>
+      <label class="full">Target locations (comma-separated) <input name="target_locations" /></label>
+      <label>Remote only
+        <select name="remote_only"><option value="true">Yes</option><option value="false">No</option></select>
+      </label>
+      <label>Minimum salary <input name="min_salary" type="number" /></label>
+      <label class="full">Keywords / skills (comma-separated) <input name="keywords" /></label>
+      <label class="full">Excluded companies (comma-separated) <input name="excluded_companies" /></label>
+      <label>Years of experience <input name="years_experience" type="number" /></label>
+      <div class="full modal-actions">
+        <button type="submit" class="btn btn-primary"><span class="btn-glow"></span>Save Profile</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Job detail modal -->
+<div class="modal-backdrop" id="job-modal">
+  <div class="modal glass modal-wide">
+    <div class="modal-header">
+      <h2 id="job-modal-title">Job</h2>
+      <button class="btn-close" data-close="job-modal">&times;</button>
+    </div>
+    <div class="job-modal-body">
+      <div class="job-modal-meta" id="job-modal-meta"></div>
+      <div class="job-modal-score" id="job-modal-score"></div>
+      <div class="job-modal-desc" id="job-modal-desc"></div>
+
+      <div class="job-modal-actions">
+        <button class="btn btn-secondary" id="btn-tailor"><span class="btn-glow"></span>Generate Tailored Materials</button>
+        <button class="btn btn-primary" id="btn-apply"><span class="btn-glow"></span>Open &amp; Autofill Application</button>
+        <select id="status-select" class="btn btn-ghost">
+          <option value="">Set status...</option>
+          <option value="matched">matched</option>
+          <option value="tailored">tailored</option>
+          <option value="applied">applied</option>
+          <option value="interviewing">interviewing</option>
+          <option value="offer">offer</option>
+          <option value="rejected">rejected</option>
+          <option value="declined">declined</option>
+          <option value="ignored">ignored</option>
+        </select>
+      </div>
+
+      <div id="tailored-output" class="tailored-output hidden">
+        <div class="tailored-col">
+          <h3>Tailored Resume</h3>
+          <pre id="tailored-resume" class="mono"></pre>
+        </div>
+        <div class="tailored-col">
+          <h3>Cover Letter</h3>
+          <pre id="tailored-cover" class="mono"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
