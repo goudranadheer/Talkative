@@ -46,7 +46,7 @@ flowchart LR
 |---|---|
 | Fixed silence thresholds fail in noisy rooms | **Adaptive noise-floor calibration:** samples 1.5 s of ambient sound and sets the speech threshold at the 75th-percentile noise level + 12 dB (clamped to −50…−20 dB). The value is reused across recordings, which removed a 1.9 s dead zone that merged consecutive utterances. |
 | Knowing who spoke without voice enrollment | **Language-based speaker detection:** Whisper's detected language is matched to each participant. For same-language edge cases it falls back to TTS timing (speech right after the app talks is attributed to the other person). |
-| The mic hears the user reading a suggestion aloud | **Echo-loop prevention:** transcripts with ≥ 50 % word overlap with a shown suggestion are discarded. |
+| The mic picks up the app's own speech, or the user reading a suggestion aloud | **Echo-loop prevention:** transcripts with ≥ 50 % word overlap with the spoken translation or a shown suggestion are discarded. |
 | Latency between translation and suggestions | **Parallel execution:** suggestion generation starts at the same time as text-to-speech, so replies appear almost immediately. |
 | API keys in a mobile app can be extracted | **Server-side secrets:** the app holds only a Supabase anon key. Groq and Anthropic keys live in edge-function secrets. |
 | Unbounded LLM spend | **Per-user quota in Postgres:** each account starts with 300 translation units. The backend returns HTTP 402 when they run out, and the app stops the mic with a friendly message. Every call is logged to `usage_events` with token counts. |
