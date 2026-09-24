@@ -2,7 +2,7 @@
 
 One-time setup to run the campus pilot. The app never ships API keys — Groq and
 Anthropic keys live only in Supabase edge-function secrets; users sign in with
-email + 6-digit code and get a free quota (300 utterances ≈ 3 conversations).
+email + password and get a free quota (300 utterances ≈ 3 conversations).
 
 ## 1. Create the Supabase project
 
