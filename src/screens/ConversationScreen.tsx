@@ -17,6 +17,7 @@ import { useApp, Message } from '../context/AppContext';
 import { transcribeAudio, aiTranslate, aiSuggest, ApiError } from '../services/api';
 import { speak, stopSpeech } from '../services/tts';
 import { detectSpeaker } from '../services/speaker';
+import { isLikelyEcho } from '../services/echoFilter';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { colors, hudLabel, radii, glow } from '../constants/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -62,18 +63,6 @@ export default function ConversationScreen({ navigation }: Props) {
       refreshProfile().catch(() => {});
     };
   }, []);
-
-  function isSimilarToSuggestion(transcribed: string): boolean {
-    const stored = lastSuggestionRef.current;
-    if (!stored) return false;
-    const normalize = (s: string) =>
-      s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').split(/\s+/).filter(Boolean);
-    const tWords = normalize(transcribed);
-    const sWords = new Set(normalize(stored));
-    if (tWords.length === 0) return false;
-    const matches = tWords.filter(w => sWords.has(w)).length;
-    return matches / tWords.length >= 0.5;
-  }
 
   // Quota exhaustion is terminal for the session — stop the mic so we don't
   // keep queueing utterances that can only fail.
@@ -216,7 +205,7 @@ export default function ConversationScreen({ navigation }: Props) {
       const { text, detectedLanguage } = await transcribeAudio(uri);
       if (!text) return;
 
-      if (isSimilarToSuggestion(text)) {
+      if (isLikelyEcho(text, lastSuggestionRef.current)) {
         lastSuggestionRef.current = null;
         return;
       }
