@@ -13,6 +13,7 @@ export function detectSpeaker(
   enrollment: { me: EnrolledSpeaker | null; them: EnrolledSpeaker | null },
   myLangCode: string,
   lastTTSEndTime: number | null,
+  now = Date.now(),
 ): 'me' | 'them' {
   const lang        = detectedLanguage.toLowerCase().split('-')[0];
   const myEnrolled  = enrollment.me?.detectedLanguage.toLowerCase().split('-')[0];
@@ -26,7 +27,7 @@ export function detectSpeaker(
 
   // Ambiguous (same language or no enrollment): use TTS timing.
   // If the app just finished speaking (TTS) within 3s, the other person is likely responding.
-  if (lastTTSEndTime !== null && Date.now() - lastTTSEndTime < 3000) {
+  if (lastTTSEndTime !== null && now - lastTTSEndTime < 3000) {
     return 'them';
   }
 

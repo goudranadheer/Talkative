@@ -6,7 +6,11 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "test:compile": "rm -rf .test-build && tsc --target ES2022 --module commonjs --outDir .test-build --skipLibCheck src/services/speaker.ts src/services/echoFilter.ts",
+    "test": "npm run test:compile && node --test tests/*.test.cjs",
+    "eval:heuristics": "npm run test:compile && node evaluation/run-eval.cjs"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
