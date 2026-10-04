@@ -1,0 +1,102 @@
+{
+  "speaker_cases": [
+    {
+      "id": "distinct-other-language",
+      "detectedLanguage": "de",
+      "meEnrollment": "en",
+      "themEnrollment": "de",
+      "myLangCode": "en",
+      "lastTTSEndTime": null,
+      "now": 10000,
+      "expected": "them"
+    },
+    {
+      "id": "distinct-my-language",
+      "detectedLanguage": "en",
+      "meEnrollment": "en",
+      "themEnrollment": "de",
+      "myLangCode": "en",
+      "lastTTSEndTime": null,
+      "now": 10000,
+      "expected": "me"
+    },
+    {
+      "id": "recent-tts-ambiguous",
+      "detectedLanguage": "en",
+      "meEnrollment": null,
+      "themEnrollment": null,
+      "myLangCode": "en",
+      "lastTTSEndTime": 8000,
+      "now": 10000,
+      "expected": "them"
+    },
+    {
+      "id": "expired-tts-own-language",
+      "detectedLanguage": "en",
+      "meEnrollment": null,
+      "themEnrollment": null,
+      "myLangCode": "en",
+      "lastTTSEndTime": 5000,
+      "now": 10000,
+      "expected": "me"
+    },
+    {
+      "id": "fallback-other-language",
+      "detectedLanguage": "fr",
+      "meEnrollment": null,
+      "themEnrollment": null,
+      "myLangCode": "en",
+      "lastTTSEndTime": null,
+      "now": 10000,
+      "expected": "them"
+    },
+    {
+      "id": "regional-tag",
+      "detectedLanguage": "de-DE",
+      "meEnrollment": "en-US",
+      "themEnrollment": "de-DE",
+      "myLangCode": "en",
+      "lastTTSEndTime": null,
+      "now": 10000,
+      "expected": "them"
+    }
+  ],
+  "echo_cases": [
+    {
+      "id": "exact-echo",
+      "transcript": "I will meet you tomorrow",
+      "reference": "I will meet you tomorrow",
+      "expected": true
+    },
+    {
+      "id": "punctuation-case",
+      "transcript": "PLEASE, call me later!",
+      "reference": "Please call me later",
+      "expected": true
+    },
+    {
+      "id": "half-overlap",
+      "transcript": "please call them tomorrow",
+      "reference": "please call tomorrow",
+      "expected": true
+    },
+    {
+      "id": "different-utterance",
+      "transcript": "where is the station",
+      "reference": "please call tomorrow",
+      "expected": false
+    },
+    {
+      "id": "short-common-word",
+      "transcript": "yes I understand",
+      "reference": "yes please continue",
+      "expected": false
+    },
+    {
+      "id": "empty",
+      "transcript": "",
+      "reference": "anything",
+      "expected": false
+    }
+  ]
+}
