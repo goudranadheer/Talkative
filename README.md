@@ -9,6 +9,7 @@ Put the phone between you and just talk. Talkative listens hands-free, works out
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Supabase](https://img.shields.io/badge/Supabase-Edge_Functions-3FCF8E?logo=supabase&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![CI](https://github.com/goudranadheer/Talkative/actions/workflows/ci.yml/badge.svg)
 
 ---
 
@@ -77,9 +78,11 @@ flowchart LR
 src/
   screens/        Auth, Briefing, DetailedBriefing (AI coach), Conversation
   hooks/          useAudioRecorder: VAD, calibration, recording lifecycle
-  services/       api (backend calls), tts, speaker (speaker detection)
+  services/       api, tts, speaker detection, echo filtering
   context/        global state: briefing, messages, session, quota
   constants/      supported languages, theme tokens
+tests/            deterministic unit tests for speaker + echo heuristics
+evaluation/       labeled fixtures and reproducible heuristic metrics
 supabase/
   migrations/     profiles, quota and usage_events schema
   functions/
@@ -105,6 +108,20 @@ You need Node.js 20+, an Android device or emulator, and a free [Supabase](https
    ```bash
    npx eas-cli build --profile preview --platform android
    ```
+
+## Verification and evaluation
+
+This repository treats AI claims as measurements, not marketing.
+
+```bash
+npm run typecheck
+npm test
+npm run eval:heuristics
+```
+
+CI runs all three checks on pushes and pull requests. The checked-in heuristic evaluation currently measures deterministic speaker-attribution and echo-loop rules with labeled fixtures and reports classification metrics. It deliberately does **not** present those fixture results as real-world ASR or translation quality.
+
+See **[EVALUATION.md](EVALUATION.md)** for the methodology and the planned recorded-audio benchmarks: word error rate, speaker-attribution accuracy, echo false positives/negatives, median/P95 pipeline latency, and translation quality.
 
 ## Known limitations and next steps
 
